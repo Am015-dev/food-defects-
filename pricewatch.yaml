@@ -58,6 +58,39 @@ sources:
   #     unit_size: minimumOrder
   #     unit_label: vertical
 
+  # -- e-food OFFICIAL Partner API (sanctioned, OAuth2, gets dish prices) -----
+  # This is the legal, no-bypass route to product-level pricing and promotions.
+  # Requires being an e-food partner: get client_id/client_secret from your
+  # e-food Account Manager (Delivery Hero developer program,
+  # https://developer-qc.e-food.gr). It reads YOUR chain's catalogue, so it
+  # sees the exact product-price / promotion defects the tracker is built for.
+  #
+  # Set credentials in the environment, never here:
+  #   export EFOOD_CLIENT_ID=...
+  #   export EFOOD_CLIENT_SECRET=...
+  #
+  # Fill in the catalogue read endpoint + JSON shape from your Partner API docs
+  # (the exact path/fields come with your credentials). The auth block below is
+  # correct for the Delivery Hero token endpoint.
+  #
+  # - name: "efood partner catalogue"
+  #   type: json
+  #   url: "https://e-food.partner.deliveryhero.io/v2/<catalogue read endpoint>"
+  #   auth:
+  #     type: oauth2_client_credentials
+  #     token_url: "https://e-food.partner.deliveryhero.io/v2/oauth/token"
+  #     client_id_env: EFOOD_CLIENT_ID
+  #     client_secret_env: EFOOD_CLIENT_SECRET
+  #   items_path: "products[]"           # <- set from the real response shape
+  #   price_scale: euro                  # or 'cents' if the API returns integers
+  #   fields:
+  #     sku: sku
+  #     title: name
+  #     price: price
+  #     original_price: original_price
+  #     discount_amount: discount_amount
+  #     discount_pct: discount_percentage
+
   # -- template for a real catalogue endpoint --------------------------------
   # 1. Open the shop page in Chrome -> DevTools -> Network -> Fetch/XHR.
   # 2. Reload, find the response with product names and prices.

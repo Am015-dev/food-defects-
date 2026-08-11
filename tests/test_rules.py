@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pricewatch import Line, evaluate  # noqa: E402
+from pricewatch import Line, evaluate, oauth2_token, Fetcher  # noqa: E402
 
 
 def rule_ids(hits):
@@ -87,3 +87,16 @@ def test_unit_price_mismatch():
               price=100, unit_size=2.0, unit_price=40)  # expected 50
     hits = evaluate(ln)
     assert "UNIT_PRICE_MISMATCH" in rule_ids(hits)
+
+
+def test_oauth2_token_missing_credentials_returns_none(monkeypatch):
+    # No creds in the environment -> fail safe (return None), never crash or
+    # make a request. Guards the sanctioned e-food Partner API path.
+    monkeypatch.delenv("EFOOD_CLIENT_ID", raising=False)
+    monkeypatch.delenv("EFOOD_CLIENT_SECRET", raising=False)
+    fetcher = Fetcher({})
+    auth = {"type": "oauth2_client_credentials",
+            "token_url": "https://e-food.partner.deliveryhero.io/v2/oauth/token",
+            "client_id_env": "EFOOD_CLIENT_ID",
+            "client_secret_env": "EFOOD_CLIENT_SECRET"}
+    assert oauth2_token(auth, fetcher) is None

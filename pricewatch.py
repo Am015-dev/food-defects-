@@ -315,6 +315,30 @@ def build_line(node: dict, src: dict, url: str) -> Line:
     )
 
 
+def oauth2_token(auth: dict, fetcher: Fetcher) -> str | None:
+    """Client-credentials OAuth2. Used by sanctioned partner APIs (e.g. the
+    e-food / Delivery Hero Partner API). Credentials come from the environment,
+    never the config file."""
+    cid = os.environ.get(auth.get("client_id_env", "PARTNER_CLIENT_ID"))
+    secret = os.environ.get(auth.get("client_secret_env", "PARTNER_CLIENT_SECRET"))
+    if not cid or not secret:
+        print(f"  set {auth.get('client_id_env', 'PARTNER_CLIENT_ID')} and "
+              f"{auth.get('client_secret_env', 'PARTNER_CLIENT_SECRET')} in the "
+              f"environment for this source", file=sys.stderr)
+        return None
+    body = {"grant_type": auth.get("grant_type", "client_credentials"),
+            "client_id": cid, "client_secret": secret}
+    if auth.get("scope"):
+        body["scope"] = auth["scope"]
+    try:
+        r = fetcher.session.post(auth["token_url"], data=body, timeout=fetcher.timeout)
+        r.raise_for_status()
+        return r.json().get(auth.get("token_field", "access_token"))
+    except (requests.RequestException, ValueError) as e:
+        print(f"  oauth2 token request failed: {e}", file=sys.stderr)
+        return None
+
+
 def read_source(src: dict, fetcher: Fetcher, limit: int | None) -> Iterable[Line]:
     kind = src.get("type", "json")
 
@@ -325,6 +349,13 @@ def read_source(src: dict, fetcher: Fetcher, limit: int | None) -> Iterable[Line
         return
 
     if kind == "json":
+        # optional sanctioned auth: obtain a bearer token before reading
+        auth = src.get("auth")
+        if auth and auth.get("type") == "oauth2_client_credentials":
+            token = oauth2_token(auth, fetcher)
+            if not token:
+                return
+            fetcher.session.headers["Authorization"] = f"Bearer {token}"
         pages = int(src.get("max_pages", 1))
         param = src.get("page_param")
         start = int(src.get("page_start", 1))

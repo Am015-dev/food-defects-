@@ -73,6 +73,41 @@ If a page is server-rendered, use `type: html` with CSS selectors instead:
 
 **Adding shops:** one source entry per shop or category. Start with three or four while you tune selectors, then widen.
 
+### Live via the official e-food Partner API (dish-level, sanctioned)
+
+This is the **legal, no-bypass route to product-level prices and promotions** — the data the tracker was built for. e-food runs a Partner API under the Delivery Hero developer program ([developer-qc.e-food.gr](https://developer-qc.e-food.gr)) with a Catalog integration (product status + pricing) and a Promotions API.
+
+To use it you must be an **e-food partner**: request a `client_id`/`client_secret` from your e-food Account Manager. The token covers all stores under your chain, so it reads *your* catalogue — exactly where a promo-driven €0 product shows up.
+
+```bash
+export EFOOD_CLIENT_ID=...
+export EFOOD_CLIENT_SECRET=...
+```
+
+```yaml
+  - name: "efood partner catalogue"
+    type: json
+    url: "https://e-food.partner.deliveryhero.io/v2/<catalogue read endpoint>"
+    auth:
+      type: oauth2_client_credentials
+      token_url: "https://e-food.partner.deliveryhero.io/v2/oauth/token"
+      client_id_env: EFOOD_CLIENT_ID
+      client_secret_env: EFOOD_CLIENT_SECRET
+    items_path: "products[]"          # set from your Partner API response shape
+    price_scale: euro
+    fields:
+      sku: sku
+      title: name
+      price: price
+      original_price: original_price
+      discount_amount: discount_amount
+      discount_pct: discount_percentage
+```
+
+The crawler handles the OAuth2 client-credentials exchange itself (`oauth2_token` in `pricewatch.py`), attaches the bearer token, and runs the full rule engine over the returned products — so a fixed-amount promo that drives a product to €0 fires `DISCOUNT_GE_BASE` + `ZERO_PRICE` exactly like the golden fixture. Fill in the exact catalogue read endpoint and field names from the Partner API docs that come with your credentials.
+
+> **Eligibility is the catch, not legality.** This route needs partner credentials, which e-food issues to its vendors/chains. If you have them (or your client/employer does), this is the clean path to dish-level defects. If you don't, there is no *legal automated* route to another shop's dish prices — that data is private to that partner.
+
 ### Live via the Apify platform
 
 Some catalogues (including e-food.gr) sit behind a bot-protection wall that refuses anonymous scripts. For those, the crawler can pull data through a **published Apify actor** — a sanctioned, keyed channel that reaches the site's *public* API, rather than defeating its protection. Set your token in the environment (never in the config), then add an `apify` source:
