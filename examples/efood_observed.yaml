@@ -1,0 +1,15 @@
+politeness:
+  respect_robots: true
+  user_agent: "pricewatch/0.1 (internal price QA)"
+
+sources:
+  - name: "efood observed cart (Masoutis)"
+    type: file
+    path: examples/efood_observed_cart.json
+    items_path: "data.categories[].items[]"
+    price_scale: euro
+    fields:
+      sku: id
+      title: name
+      price: price
+      original_price: initial_price
