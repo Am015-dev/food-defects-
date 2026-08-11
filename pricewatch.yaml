@@ -26,27 +26,37 @@ sources:
       unit_price: price_per_unit
 
   # -- live via the Apify platform (sanctioned, keyed API) -------------------
-  # Reaches e-food's PUBLIC listing data through a published Apify actor. No
-  # login, no Cloudflare bypass — Apify runs the actor and hands back a dataset.
-  # Set your token first:  export APIFY_TOKEN=apify_api_xxx
-  # Note: the public actor returns STORE-LEVEL fields (delivery cost, min order,
-  # ratings, hours), not individual dish prices. Map the fields to whatever the
-  # actor's dataset actually names them.
+  # Reaches e-food's PUBLIC listing data through the studio-amba/efood-scraper
+  # actor. No login, no Cloudflare bypass — Apify runs the actor and hands back
+  # a dataset. Set your token first:  export APIFY_TOKEN=apify_api_xxx
+  #
+  # SCOPE: this actor returns STORE-LEVEL data (deliveryCost, minimumOrder,
+  # rating, offers, hours) — NOT individual dish prices. Per the actor's own
+  # docs, menu/dish prices require authenticated access and are not available
+  # here. The dish-price rules were written for menu lines: mapping
+  # price=deliveryCost means NEGATIVE_PRICE still catches a genuinely broken
+  # (< 0) delivery fee, but ZERO_PRICE will also fire on every free-delivery
+  # shop, which is normal — filter those out (e.g. cases --rule NEGATIVE_PRICE)
+  # or add store-specific rules if you monitor this feed seriously.
   #
   # - name: "efood athens stores (apify)"
   #   type: apify
-  #   actor: "some-user~efood-scraper"   # actor id, or use dataset_id below
-  #   # dataset_id: "abc123"             # to read an already-produced dataset
+  #   actor: "studio-amba/efood-scraper"
+  #   # dataset_id: "abc123"             # or read an already-produced dataset
   #   token_env: APIFY_TOKEN
-  #   input:                             # actor-specific run input
-  #     city: "athens"
+  #   input:
+  #     location: "Athens"
+  #     coverage: "city-wide"            # grid-sweep the whole metro
+  #     maxResults: 20000
+  #     onlyOpen: false
   #   items_path: ""                     # dataset is a top-level array
   #   price_scale: euro
   #   fields:
-  #     sku: id
+  #     sku: efoodId
   #     title: name
-  #     price: delivery_cost             # whatever monetary field you monitor
-  #     unit_size: minimum_order
+  #     price: deliveryCost
+  #     unit_size: minimumOrder
+  #     unit_label: vertical
 
   # -- template for a real catalogue endpoint --------------------------------
   # 1. Open the shop page in Chrome -> DevTools -> Network -> Fetch/XHR.

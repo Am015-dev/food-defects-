@@ -84,20 +84,29 @@ export APIFY_TOKEN=apify_api_xxx
 ```yaml
   - name: "efood athens stores (apify)"
     type: apify
-    actor: "some-user~efood-scraper"   # or dataset_id: "abc123"
+    actor: "studio-amba/efood-scraper"   # or dataset_id: "abc123"
     token_env: APIFY_TOKEN
     input:
-      city: "athens"
-    items_path: ""                     # actor dataset is a top-level array
+      location: "Athens"
+      coverage: "city-wide"
+      maxResults: 20000
+    items_path: ""                       # actor dataset is a top-level array
     price_scale: euro
     fields:
-      sku: id
+      sku: efoodId
       title: name
-      price: delivery_cost
-      unit_size: minimum_order
+      price: deliveryCost
+      unit_size: minimumOrder
 ```
 
-**Scope limit:** the public e-food actor returns *store-level* fields (delivery cost, minimum order, ratings, hours), not individual dish prices. Menu-level dish prices are only reachable through e-food's private/authenticated API, which this crawler does not scrape — point it at a sanctioned menu feed if you have one.
+Run it:
+
+```bash
+export APIFY_TOKEN=apify_api_xxx
+python3 pricewatch.py scan --config pricewatch.yaml
+```
+
+**Scope limit (from the actor's own docs):** the public e-food actor returns *store-level* fields — delivery cost, minimum order, ratings, offers, hours — **not individual dish prices**. Menu-level dish prices require authenticated access to e-food's private API and are not available through this actor, and this crawler does not scrape that private API. So this feed lets pricewatch monitor store-level integrity live and autonomously; it will not surface a defect that lives on a product/dish (e.g. a single item mispriced to €0 inside a shop's menu). For dish-level monitoring you need a sanctioned menu feed.
 
 ## Rules
 
