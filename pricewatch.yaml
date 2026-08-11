@@ -1,0 +1,49 @@
+politeness:
+  delay_seconds: 1.5
+  timeout: 20
+  respect_robots: true
+  user_agent: "pricewatch/0.1 (internal price QA; contact: you@example.com)"
+
+sources:
+  # offline fixture — proves the engine works without hitting the network.
+  # this reproduces the incident that triggered the tracker: a fixed-amount
+  # promo drove two SKUs to €0,00 with no struck-through original and no
+  # unit price rendered, plus a 90%+ near-miss on a third line.
+  - name: "fixture: observed cart"
+    type: file
+    path: fixture_cart.json
+    items_path: "data.categories[].items[]"
+    price_scale: euro
+    fields:
+      sku: id
+      title: name
+      price: price
+      original_price: initial_price
+      discount_amount: discount_amount
+      discount_pct: discount
+      unit_size: quantity
+      unit_label: unit
+      unit_price: price_per_unit
+
+  # -- template for a real catalogue endpoint --------------------------------
+  # 1. Open the shop page in Chrome -> DevTools -> Network -> Fetch/XHR.
+  # 2. Reload, find the response with product names and prices.
+  # 3. Fill in the endpoint + field mapping below and un-comment.
+  #
+  # - name: "shop 1234 catalogue"
+  #   type: json
+  #   url: "https://<host>/<the endpoint you copied>"
+  #   items_path: "data.categories[].items[]"
+  #   page_param: page
+  #   max_pages: 20
+  #   price_scale: euro
+  #   fields:
+  #     sku: id
+  #     title: name
+  #     price: price
+  #     original_price: initial_price
+  #     discount_amount: discount_amount
+  #     discount_pct: discount
+  #     unit_size: quantity
+  #     unit_label: unit
+  #     unit_price: price_per_unit

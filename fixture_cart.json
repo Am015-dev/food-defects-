@@ -1,0 +1,65 @@
+{
+  "data": {
+    "categories": [
+      {
+        "name": "soft-drinks",
+        "items": [
+          {
+            "id": "PEP-TWIST-15",
+            "name": "Pepsi Twist 1.5l",
+            "price": 0,
+            "initial_price": 1.05,
+            "discount_amount": 1.05,
+            "quantity": 1.5,
+            "unit": "lt"
+          },
+          {
+            "id": "PEP-TWIST-15",
+            "name": "Pepsi Twist 1.5l",
+            "price": 0,
+            "initial_price": 1.05,
+            "discount_amount": 1.05,
+            "quantity": 1.5,
+            "unit": "lt"
+          },
+          {
+            "id": "PEP-ZERO-15",
+            "name": "Pepsi Zero Sugar 1.5l",
+            "price": 0,
+            "initial_price": 1.05,
+            "discount_amount": 1.05,
+            "quantity": 1.5,
+            "unit": "lt"
+          },
+          {
+            "id": "PEP-ZERO-15",
+            "name": "Pepsi Zero Sugar 1.5l",
+            "price": 0,
+            "initial_price": 1.05,
+            "discount_amount": 1.05,
+            "quantity": 1.5,
+            "unit": "lt"
+          },
+          {
+            "id": "COKE-15",
+            "name": "Coca-Cola 1.5l",
+            "price": 0.15,
+            "initial_price": 1.95,
+            "quantity": 1.5,
+            "unit": "lt",
+            "price_per_unit": 0.10
+          },
+          {
+            "id": "COKE-15",
+            "name": "Coca-Cola 1.5l",
+            "price": 0.15,
+            "initial_price": 1.95,
+            "quantity": 1.5,
+            "unit": "lt",
+            "price_per_unit": 0.10
+          }
+        ]
+      }
+    ]
+  }
+}
