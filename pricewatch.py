@@ -26,7 +26,7 @@ import sqlite3
 import sys
 import time
 import urllib.robotparser
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -349,37 +349,52 @@ def read_source(src: dict, fetcher: Fetcher, limit: int | None) -> Iterable[Line
         return
 
     if kind == "json":
-        # optional sanctioned auth: obtain a bearer token before reading
+        # optional sanctioned auth: obtain a bearer token before reading.
+        # the header is scoped to THIS source and removed afterwards, so a
+        # partner credential never leaks into requests to another source/host.
         auth = src.get("auth")
+        added_auth = False
+        prev_robots = fetcher.respect_robots
+        # a source may opt out of robots.txt (an authenticated API you are
+        # authorized to call is not anonymous crawling of public pages)
+        if "respect_robots" in src:
+            fetcher.respect_robots = bool(src["respect_robots"])
         if auth and auth.get("type") == "oauth2_client_credentials":
             token = oauth2_token(auth, fetcher)
             if not token:
+                fetcher.respect_robots = prev_robots
                 return
             fetcher.session.headers["Authorization"] = f"Bearer {token}"
-        pages = int(src.get("max_pages", 1))
-        param = src.get("page_param")
-        start = int(src.get("page_start", 1))
-        seen = 0
-        for i in range(pages):
-            params = dict(src.get("query", {}))
-            if param:
-                params[param] = start + i
-            r = fetcher.get(src["url"], params=params or None)
-            if r is None:
-                return
-            try:
-                data = r.json()
-            except ValueError:
-                print(f"  {src['name']}: response is not JSON", file=sys.stderr)
-                return
-            nodes = walk(data, src.get("items_path", ""))
-            if not nodes:
-                return
-            for node in nodes:
-                yield build_line(node, src, r.url)
-                seen += 1
-                if limit and seen >= limit:
+            added_auth = True
+        try:
+            pages = int(src.get("max_pages", 1))
+            param = src.get("page_param")
+            start = int(src.get("page_start", 1))
+            seen = 0
+            for i in range(pages):
+                params = dict(src.get("query", {}))
+                if param:
+                    params[param] = start + i
+                r = fetcher.get(src["url"], params=params or None)
+                if r is None:
                     return
+                try:
+                    data = r.json()
+                except ValueError:
+                    print(f"  {src['name']}: response is not JSON", file=sys.stderr)
+                    return
+                nodes = walk(data, src.get("items_path", ""))
+                if not nodes:
+                    return
+                for node in nodes:
+                    yield build_line(node, src, r.url)
+                    seen += 1
+                    if limit and seen >= limit:
+                        return
+        finally:
+            fetcher.respect_robots = prev_robots
+            if added_auth:
+                fetcher.session.headers.pop("Authorization", None)
         return
 
     if kind == "apify":

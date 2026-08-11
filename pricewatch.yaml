@@ -76,6 +76,7 @@ sources:
   # - name: "efood partner catalogue"
   #   type: json
   #   url: "https://e-food.partner.deliveryhero.io/v2/<catalogue read endpoint>"
+  #   respect_robots: false             # authorized API call, not anonymous crawling
   #   auth:
   #     type: oauth2_client_credentials
   #     token_url: "https://e-food.partner.deliveryhero.io/v2/oauth/token"

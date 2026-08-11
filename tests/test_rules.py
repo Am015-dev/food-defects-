@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pricewatch import Line, evaluate, oauth2_token, Fetcher  # noqa: E402
+from pricewatch import Line, evaluate, oauth2_token, Fetcher, read_source  # noqa: E402
 
 
 def rule_ids(hits):
@@ -100,3 +100,19 @@ def test_oauth2_token_missing_credentials_returns_none(monkeypatch):
             "client_id_env": "EFOOD_CLIENT_ID",
             "client_secret_env": "EFOOD_CLIENT_SECRET"}
     assert oauth2_token(auth, fetcher) is None
+
+
+def test_auth_header_does_not_leak_across_sources(monkeypatch):
+    # A source whose oauth token can't be obtained must not leave an
+    # Authorization header on the shared session for the next source/host.
+    monkeypatch.delenv("EFOOD_CLIENT_ID", raising=False)
+    monkeypatch.delenv("EFOOD_CLIENT_SECRET", raising=False)
+    fetcher = Fetcher({})
+    src = {"name": "partner", "type": "json", "url": "https://example.invalid/x",
+           "auth": {"type": "oauth2_client_credentials",
+                    "token_url": "https://example.invalid/token",
+                    "client_id_env": "EFOOD_CLIENT_ID",
+                    "client_secret_env": "EFOOD_CLIENT_SECRET"}}
+    # drain the generator; token fetch fails safe, source yields nothing
+    assert list(read_source(src, fetcher, None)) == []
+    assert "Authorization" not in fetcher.session.headers
