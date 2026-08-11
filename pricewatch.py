@@ -20,6 +20,7 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -348,6 +349,49 @@ def read_source(src: dict, fetcher: Fetcher, limit: int | None) -> Iterable[Line
                 seen += 1
                 if limit and seen >= limit:
                     return
+        return
+
+    if kind == "apify":
+        # Pull data through the Apify platform's public API. This runs a
+        # published actor (e.g. an e-food public-listing scraper) and reads its
+        # dataset — a sanctioned, keyed channel, not a bypass. The token is read
+        # from the environment (APIFY_TOKEN), never stored in the config file.
+        token = os.environ.get(src.get("token_env", "APIFY_TOKEN"))
+        if not token:
+            print(f"  {src['name']}: set {src.get('token_env', 'APIFY_TOKEN')} "
+                  f"in the environment to use an apify source", file=sys.stderr)
+            return
+        dataset = src.get("dataset_id")
+        actor = src.get("actor")
+        try:
+            if dataset:
+                # read an existing dataset the actor already produced
+                resp = fetcher.session.get(
+                    f"https://api.apify.com/v2/datasets/{dataset}/items",
+                    params={"token": token, "clean": "true"},
+                    timeout=max(fetcher.timeout, 120))
+            elif actor:
+                # run the actor synchronously and take its dataset items
+                resp = fetcher.session.post(
+                    f"https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items",
+                    params={"token": token},
+                    json=src.get("input", {}),
+                    timeout=max(fetcher.timeout, 300))
+            else:
+                print(f"  {src['name']}: apify source needs 'actor' or 'dataset_id'",
+                      file=sys.stderr)
+                return
+            resp.raise_for_status()
+            data = resp.json()
+        except (requests.RequestException, ValueError) as e:
+            print(f"  {src['name']}: apify fetch failed: {e}", file=sys.stderr)
+            return
+        seen = 0
+        for node in walk(data, src.get("items_path", "")):
+            yield build_line(node, src, f"apify://{actor or dataset}")
+            seen += 1
+            if limit and seen >= limit:
+                return
         return
 
     if kind == "html":

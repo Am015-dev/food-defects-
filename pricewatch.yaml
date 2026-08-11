@@ -25,6 +25,29 @@ sources:
       unit_label: unit
       unit_price: price_per_unit
 
+  # -- live via the Apify platform (sanctioned, keyed API) -------------------
+  # Reaches e-food's PUBLIC listing data through a published Apify actor. No
+  # login, no Cloudflare bypass — Apify runs the actor and hands back a dataset.
+  # Set your token first:  export APIFY_TOKEN=apify_api_xxx
+  # Note: the public actor returns STORE-LEVEL fields (delivery cost, min order,
+  # ratings, hours), not individual dish prices. Map the fields to whatever the
+  # actor's dataset actually names them.
+  #
+  # - name: "efood athens stores (apify)"
+  #   type: apify
+  #   actor: "some-user~efood-scraper"   # actor id, or use dataset_id below
+  #   # dataset_id: "abc123"             # to read an already-produced dataset
+  #   token_env: APIFY_TOKEN
+  #   input:                             # actor-specific run input
+  #     city: "athens"
+  #   items_path: ""                     # dataset is a top-level array
+  #   price_scale: euro
+  #   fields:
+  #     sku: id
+  #     title: name
+  #     price: delivery_cost             # whatever monetary field you monitor
+  #     unit_size: minimum_order
+
   # -- template for a real catalogue endpoint --------------------------------
   # 1. Open the shop page in Chrome -> DevTools -> Network -> Fetch/XHR.
   # 2. Reload, find the response with product names and prices.

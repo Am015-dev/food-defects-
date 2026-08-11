@@ -73,6 +73,32 @@ If a page is server-rendered, use `type: html` with CSS selectors instead:
 
 **Adding shops:** one source entry per shop or category. Start with three or four while you tune selectors, then widen.
 
+### Live via the Apify platform
+
+Some catalogues (including e-food.gr) sit behind a bot-protection wall that refuses anonymous scripts. For those, the crawler can pull data through a **published Apify actor** — a sanctioned, keyed channel that reaches the site's *public* API, rather than defeating its protection. Set your token in the environment (never in the config), then add an `apify` source:
+
+```bash
+export APIFY_TOKEN=apify_api_xxx
+```
+
+```yaml
+  - name: "efood athens stores (apify)"
+    type: apify
+    actor: "some-user~efood-scraper"   # or dataset_id: "abc123"
+    token_env: APIFY_TOKEN
+    input:
+      city: "athens"
+    items_path: ""                     # actor dataset is a top-level array
+    price_scale: euro
+    fields:
+      sku: id
+      title: name
+      price: delivery_cost
+      unit_size: minimum_order
+```
+
+**Scope limit:** the public e-food actor returns *store-level* fields (delivery cost, minimum order, ratings, hours), not individual dish prices. Menu-level dish prices are only reachable through e-food's private/authenticated API, which this crawler does not scrape — point it at a sanctioned menu feed if you have one.
+
 ## Rules
 
 | Rule | Severity | Fires when |
