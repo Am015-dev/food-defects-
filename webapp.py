@@ -340,15 +340,40 @@ def build_counts_charts(rows):
 STALE_AFTER_HOURS = 36
 
 
+def _valid_shop_id():
+    """The ?shop= query param, or None if missing or not a tracked shop."""
+    shop_id = request.args.get("shop", type=int)
+    return shop_id if shop_id in SHOP_LABELS else None
+
+
+def _parse_q():
+    return (request.args.get("q") or "").strip() or None
+
+
+def _parse_category():
+    return (request.args.get("category") or "").strip() or None
+
+
+def _enrich_with_comparison_info(rows):
+    """Add normalized per-unit price info (price_utils.get_price_comparison_info)
+    to each row dict in place. Every row must have "price", and may have
+    "size_info" / "metric_unit_description"."""
+    for row in rows:
+        comparison_info = get_price_comparison_info(
+            row["price"], row.get("size_info"), row.get("metric_unit_description")
+        )
+        row.update(comparison_info)
+
+
 @app.route("/")
 def dashboard():
-    shop_filter = request.args.get("shop", type=int)
-    q = (request.args.get("q") or "").strip() or None
+    shop_filter = _valid_shop_id()
+    q = _parse_q()
     bug_type = request.args.get("type") or None
     if bug_type not in (None, "zero", "placeholder", "deal"):
         bug_type = None
 
-    shop_ids = [shop_filter] if shop_filter in SHOP_LABELS else None
+    shop_ids = [shop_filter] if shop_filter is not None else None
     results = get_all_shop_views(shop_ids=shop_ids, q=q, bug_type=bug_type)
     ok_results = [r for r in results if r["ok"]]
 
@@ -370,7 +395,7 @@ def dashboard():
         bargains, total_deals = get_deals_page(
             session,
             SHOP_LABELS,
-            shop_id=shop_filter if shop_filter in SHOP_LABELS else None,
+            shop_id=shop_filter,
             q=q,
             per_page=30,
             latest=latest,
@@ -420,11 +445,9 @@ def dashboard():
 
 @app.route("/deals")
 def deals():
-    shop_filter = request.args.get("shop", type=int)
-    if shop_filter not in SHOP_LABELS:
-        shop_filter = None
-    category = (request.args.get("category") or "").strip() or None
-    q = (request.args.get("q") or "").strip() or None
+    shop_filter = _valid_shop_id()
+    category = _parse_category()
+    q = _parse_q()
     min_pct = request.args.get("min_pct", type=float)
     sort = request.args.get("sort") or "pct"
     page = max(1, request.args.get("page", default=1, type=int))
@@ -476,8 +499,8 @@ COMPARE_SCAN_GUARD_ROWS = 20000
 
 @app.route("/compare")
 def compare():
-    q = (request.args.get("q") or "").strip() or None
-    category = (request.args.get("category") or "").strip() or None
+    q = _parse_q()
+    category = _parse_category()
     min_spread = request.args.get("min_spread", default=5, type=int)
     page = max(1, request.args.get("page", default=1, type=int))
     per_page = 25
@@ -509,13 +532,8 @@ def compare():
     finally:
         session.close()
 
-    # Add normalized price info to each row for comparison
     for group in groups:
-        for row in group["rows"]:
-            comparison_info = get_price_comparison_info(
-                row["price"], row.get("size_info"), row.get("metric_unit_description")
-            )
-            row.update(comparison_info)
+        _enrich_with_comparison_info(group["rows"])
 
     total = len(groups)
     pages = max(1, math.ceil(total / per_page))
@@ -542,11 +560,9 @@ def search():
     (flagged rows only), /deals (verified deals only), or /compare
     (products in 2+ shops with a real spread), this is the plain "what
     does X cost near me" lookup with nothing else filtering it out."""
-    q = (request.args.get("q") or "").strip() or None
-    shop_filter = request.args.get("shop", type=int)
-    if shop_filter not in SHOP_LABELS:
-        shop_filter = None
-    category = (request.args.get("category") or "").strip() or None
+    q = _parse_q()
+    shop_filter = _valid_shop_id()
+    category = _parse_category()
     sort = request.args.get("sort") or "price"
     if sort not in ("price", "unit_price", "name"):
         sort = "price"
@@ -571,11 +587,7 @@ def search():
     finally:
         session.close()
 
-    for row in rows:
-        comparison_info = get_price_comparison_info(
-            row["price"], row.get("size_info"), row.get("metric_unit_description")
-        )
-        row.update(comparison_info)
+    _enrich_with_comparison_info(rows)
 
     pages = max(1, math.ceil(total / per_page))
     return render_template(
@@ -597,11 +609,9 @@ def drops():
     """Items whose price fell between a shop's previous snapshot and its
     latest one -- the flip side of /deals, and the natural thing to
     surface daily given the data is already collected."""
-    shop_filter = request.args.get("shop", type=int)
-    if shop_filter not in SHOP_LABELS:
-        shop_filter = None
-    category = (request.args.get("category") or "").strip() or None
-    q = (request.args.get("q") or "").strip() or None
+    shop_filter = _valid_shop_id()
+    category = _parse_category()
+    q = _parse_q()
     page = max(1, request.args.get("page", default=1, type=int))
     per_page = 50
 
@@ -622,11 +632,7 @@ def drops():
     finally:
         session.close()
 
-    for row in rows:
-        comparison_info = get_price_comparison_info(
-            row["price"], row.get("size_info"), row.get("metric_unit_description")
-        )
-        row.update(comparison_info)
+    _enrich_with_comparison_info(rows)
 
     pages = max(1, math.ceil(total / per_page))
     return render_template(
@@ -822,12 +828,7 @@ def verify_item(shop_id, code):
                 shop_comparison = get_product_across_shops(
                     session, stored.name, SHOP_LABELS, exclude_shop_id=shop_id
                 )
-                # Add normalized price info to each comparison row
-                for row in shop_comparison:
-                    comparison_info = get_price_comparison_info(
-                        row["price"], row.get("size_info"), row.get("metric_unit_description")
-                    )
-                    row.update(comparison_info)
+                _enrich_with_comparison_info(shop_comparison)
             except Exception:  # noqa: BLE001
                 # If comparison fails, just continue without it
                 shop_comparison = []

@@ -73,7 +73,11 @@ def store_snapshot(session, shop_id, label, today, data):
         price = it.get("price")
         size_info = it.get("size_info")
         metric_unit_description = it.get("metric_unit_description")
-        unit_price, unit_kind = derive_unit_price(price, size_info, metric_unit_description)
+        # unit_kind (the second return value) isn't stored -- it was
+        # write-only in the schema; unit_price alone is what /deals and
+        # /search sort by, and display already derives its own unit
+        # label independently (see get_price_comparison_info).
+        unit_price, _unit_kind = derive_unit_price(price, size_info, metric_unit_description)
         rows.append(
             ItemPrice(
                 snapshot_id=snapshot.id,
@@ -88,7 +92,6 @@ def store_snapshot(session, shop_id, label, today, data):
                 size_info=size_info,
                 metric_unit_description=metric_unit_description,
                 unit_price=unit_price,
-                unit_kind=unit_kind,
                 is_zero_price_bug=it["id"] in zero_bug_ids,
                 is_placeholder_bug=it["id"] in placeholder_bug_ids,
                 is_verified_deal=it["id"] in deal_pct_by_id,

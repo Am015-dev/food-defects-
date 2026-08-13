@@ -79,7 +79,6 @@ class ItemPrice(Base):
     size_info = Column(String)
     metric_unit_description = Column(String)  # e-food's own unit price, e.g. "3,36€ / kg"
     unit_price = Column(Float)  # parsed from metric_unit_description (or size_info fallback)
-    unit_kind = Column(String)  # "kg" / "lt" / "τεμ" / ...
     name_fold = Column(String)  # accent-stripped, casefolded name, for search
     is_zero_price_bug = Column(Boolean, default=False)
     is_placeholder_bug = Column(Boolean, default=False)
@@ -107,7 +106,6 @@ def _add_missing_columns():
         "code": "VARCHAR",
         "metric_unit_description": "VARCHAR",
         "unit_price": "FLOAT",
-        "unit_kind": "VARCHAR",
         "name_fold": "VARCHAR",
     }
     for name, sql_type in new_columns.items():
@@ -115,6 +113,31 @@ def _add_missing_columns():
             with engine.begin() as conn:
                 conn.execute(text(f"ALTER TABLE item_prices ADD COLUMN {name} {sql_type}"))
             print(f"db: added item_prices.{name}")
+
+
+def _drop_removed_columns():
+    """The reverse of _add_missing_columns(): drops columns that used to
+    be part of the schema but no longer are. Needs SQLite 3.35+ (2021)
+    or Postgres (DROP COLUMN has always been supported) -- both apply
+    here, so no version guard.
+    """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if not inspector.has_table("item_prices"):
+        return
+    existing = {c["name"] for c in inspector.get_columns("item_prices")}
+    # unit_kind was write-only: computed and stored at ingest time but
+    # never read by any query, route, or template -- unit_price alone
+    # is what /deals and /search actually sort by, and display already
+    # shows the appropriate unit via get_price_comparison_info without
+    # needing the stored column.
+    removed_columns = ["unit_kind"]
+    for name in removed_columns:
+        if name in existing:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE item_prices DROP COLUMN {name}"))
+            print(f"db: dropped item_prices.{name}")
 
 
 def _ensure_indexes():
@@ -149,6 +172,7 @@ def init_db(retries=5, delay_seconds=2):
         try:
             Base.metadata.create_all(engine)
             _add_missing_columns()
+            _drop_removed_columns()
             _ensure_indexes()
             return
         except Exception as exc:  # noqa: BLE001
