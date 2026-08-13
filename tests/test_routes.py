@@ -208,6 +208,18 @@ def test_deals_filters(client, seeded, params):
     assert resp.status_code == 200
 
 
+def test_deals_out_of_range_page_shows_real_rows_not_empty(client, seeded):
+    # Regression: get_deals_page used to run the SQL query at the
+    # caller's raw, unclamped page (offset far past the last real row),
+    # while the template's "page N of pages" label was clamped and so
+    # claimed real data was shown when the table was actually empty.
+    resp = client.get("/deals", query_string={"page": "999"})
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "Πραγματική Προσφορά" in body  # the one seeded verified deal
+    assert "Καμία προσφορά" not in body  # empty-state text must not show
+
+
 @pytest.mark.parametrize(
     "params",
     [
@@ -287,6 +299,16 @@ def test_search_finds_product_across_shops(client, seeded):
     body = resp.get_data(as_text=True)
     assert SHOP_A_LABEL in body
     assert SHOP_B_LABEL in body
+
+
+def test_search_out_of_range_page_shows_real_rows_not_empty(client, seeded):
+    # Same regression as /deals: the query must be clamped to the real
+    # last page before running, not after.
+    resp = client.get("/search", query_string={"q": COMMON_PRODUCT, "page": "999"})
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert COMMON_PRODUCT in body
+    assert "Κανένα αποτέλεσμα" not in body
 
 
 @pytest.mark.parametrize(

@@ -2,6 +2,7 @@
 over time, and cross-shop price comparison for the same product name.
 """
 
+import math
 from collections import defaultdict
 
 from sqlalchemy import and_, func, or_
@@ -267,7 +268,13 @@ def get_deals_page(
     else:
         query = query.order_by(ItemPrice.deal_pct.desc())
 
-    page = max(1, page)
+    # Clamp against the real page count BEFORE querying -- an
+    # out-of-range page (e.g. the last real page was 2 but ?page=999 was
+    # requested) must return that last real page's rows, not run the
+    # query at a huge OFFSET that returns nothing while the caller's
+    # "page N of pages" label still claims real data was shown.
+    last_page = max(1, math.ceil(total / per_page))
+    page = min(max(1, page), last_page)
     rows = query.offset((page - 1) * per_page).limit(per_page).all()
 
     results = []
@@ -400,7 +407,10 @@ def search_products(
     else:
         query = query.order_by(ItemPrice.price.asc())
 
-    page = max(1, page)
+    # See the identical comment in get_deals_page -- clamp against the
+    # real page count before querying, not after.
+    last_page = max(1, math.ceil(total / per_page))
+    page = min(max(1, page), last_page)
     rows = query.offset((page - 1) * per_page).limit(per_page).all()
 
     results = []
