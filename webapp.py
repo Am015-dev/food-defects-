@@ -64,19 +64,32 @@ def refresh_status():
 
 
 def _shops_needing_refresh():
-    """Shops with no snapshot for today (UTC)."""
+    """Shops whose stored data for today (UTC) is missing or unusable.
+
+    A snapshot also counts as stale if its rows carry no item code. That
+    happens after the schema gains a column an older ingest didn't fill:
+    the data looks present, so a plain date check would never re-fetch
+    it, and features depending on the new column would stay broken until
+    the next calendar day. Checking usability instead of mere existence
+    lets the dashboard heal itself on the next page load.
+    """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     session = SessionLocal()
     try:
-        fresh_ids = {
-            row[0]
-            for row in session.query(Snapshot.shop_id).filter(
-                Snapshot.snapshot_date == today
+        usable_ids = set()
+        for shop_id, snapshot_id in session.query(Snapshot.shop_id, Snapshot.id).filter(
+            Snapshot.snapshot_date == today
+        ):
+            has_code = (
+                session.query(ItemPrice.id)
+                .filter(ItemPrice.snapshot_id == snapshot_id, ItemPrice.code.isnot(None))
+                .first()
             )
-        }
+            if has_code:
+                usable_ids.add(shop_id)
     finally:
         session.close()
-    return [s for s in SHOPS if s["id"] not in fresh_ids]
+    return [s for s in SHOPS if s["id"] not in usable_ids]
 
 
 def _run_refresh(pending):
