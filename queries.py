@@ -18,6 +18,51 @@ def get_latest_snapshot(session, shop_id):
     )
 
 
+def get_product_across_shops(session, product_name, exclude_shop_id=None):
+    """Find the same product (by name) across all shops' latest snapshots.
+
+    Returns list of dicts: {shop_id, shop_label, name, price, full_price,
+    l30d_price, size_info, category} ordered by price ascending.
+    """
+    from shops import SHOP_LABELS
+
+    latest_snapshots = {}
+    for shop_id in SHOP_LABELS.keys():
+        snap = get_latest_snapshot(session, shop_id)
+        if snap:
+            latest_snapshots[shop_id] = snap
+
+    results = []
+    for shop_id, snapshot in latest_snapshots.items():
+        if exclude_shop_id and shop_id == exclude_shop_id:
+            continue
+
+        # Find product by exact name match
+        item = (
+            session.query(ItemPrice)
+            .filter(
+                ItemPrice.snapshot_id == snapshot.id,
+                ItemPrice.name == product_name
+            )
+            .first()
+        )
+
+        if item and item.price is not None and item.price > 0:
+            results.append({
+                "shop_id": shop_id,
+                "shop_label": SHOP_LABELS.get(shop_id, "Unknown"),
+                "name": item.name,
+                "price": item.price,
+                "full_price": item.full_price,
+                "l30d_price": item.l30d_price,
+                "size_info": item.size_info,
+                "category": item.category,
+            })
+
+    # Sort by price ascending
+    return sorted(results, key=lambda r: r["price"])
+
+
 def get_snapshot_items(session, snapshot_id):
     """Every item in a snapshot. Expensive for a big catalog (thousands of
     rows) -- prefer get_flagged_items or a filtered query when only a

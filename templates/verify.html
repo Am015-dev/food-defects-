@@ -70,4 +70,26 @@
   </div>
 </section>
 
+{% if shop_comparison %}
+<section class="panel">
+  <h2>Τιμή σε άλλα καταστήματα</h2>
+  <p class="meta">Το ίδιο προϊόν στα υπόλοιπα καταστήματα που παρακολουθούμε, ταξινομημένο κατά τιμή.</p>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Κατάστημα</th><th>Τιμή</th><th>Μέγεθος</th><th>Κανονικοποιημένη</th></tr></thead>
+      <tbody>
+        {% for row in shop_comparison %}
+        <tr>
+          <td>{{ row.shop_label }}</td>
+          <td class="price-now">{{ row.price|eur }}</td>
+          <td class="item-cat">{{ row.size_info or '—' }}</td>
+          <td class="num" title="Τιμή ανά 100g{% if row.normalized_price %}: {{ row.normalized_display }}{% endif %}">{{ row.normalized_display }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
 {% endblock %}

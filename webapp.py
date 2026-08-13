@@ -36,6 +36,7 @@ from queries import (
     get_item_history_by_code,
     get_latest_snapshot,
     get_latest_snapshots_for_all_shops,
+    get_product_across_shops,
     get_trend,
     iter_all_sales,
 )
@@ -610,6 +611,7 @@ def verify_item(shop_id, code):
     if shop_id not in SHOP_LABELS:
         abort(404)
 
+    shop_comparison = []
     session = SessionLocal()
     try:
         # First, try to find the product in the latest snapshot. If not found,
@@ -644,6 +646,15 @@ def verify_item(shop_id, code):
                         snapshot_date = snap.snapshot_date
                         break
         history_rows = get_item_history_by_code(session, shop_id, code)
+
+        # Get this product's price across all shops for comparison
+        shop_comparison = []
+        if stored is not None:
+            shop_comparison = get_product_across_shops(session, stored.name, exclude_shop_id=shop_id)
+            # Add normalized price info to each comparison row
+            for row in shop_comparison:
+                comparison_info = get_price_comparison_info(row["price"], row.get("size_info"))
+                row.update(comparison_info)
     finally:
         session.close()
 
@@ -715,6 +726,7 @@ def verify_item(shop_id, code):
         verdict_ok=verdict_ok,
         price_chart=price_chart,
         history_points=len(history_rows),
+        shop_comparison=shop_comparison,
     )
 
 
