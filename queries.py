@@ -244,11 +244,11 @@ def compare_across_shops(
     by_name = defaultdict(list)
     for shop_id, snap in latest.items():
         # Column-only query: this walks every product in every shop
-        # (~85k rows across 12 shops), and only three fields are needed.
+        # (~85k rows across 12 shops), and only fields are needed.
         # Materializing full ORM objects for that is what this instance
         # cannot afford.
         query = (
-            session.query(ItemPrice.name, ItemPrice.price, ItemPrice.category)
+            session.query(ItemPrice.name, ItemPrice.price, ItemPrice.category, ItemPrice.size_info)
             .filter(ItemPrice.snapshot_id == snap.id, ItemPrice.price > 0)
         )
         if q:
@@ -256,13 +256,14 @@ def compare_across_shops(
         if category:
             query = query.filter(ItemPrice.category.ilike(f"{category}%"))
         label = shop_labels_by_id[shop_id]
-        for name, price, category_value in query.all():
+        for name, price, category_value, size_info in query.all():
             by_name[name].append(
                 {
                     "shop_id": shop_id,
                     "shop_label": label,
                     "price": price,
                     "category": category_value,
+                    "size_info": size_info,
                 }
             )
 

@@ -39,12 +39,16 @@
     </h3>
     <div class="table-scroll">
       <table>
-        <thead><tr><th>Κατάστημα</th><th>Τιμή</th></tr></thead>
+        <thead><tr><th>Κατάστημα</th><th>Τιμή</th>{% if g.rows|selectattr('has_size_info')|list %}<th>Μέγεθος</th><th>Κανονικοποιημένη</th>{% endif %}</tr></thead>
         <tbody>
           {% for row in g.rows %}
           <tr>
             <td>{{ row.shop_label }}</td>
             <td class="{{ 'price-now' if row.price == g.low else 'num' }}">{{ row.price|eur }}</td>
+            {% if g.rows|selectattr('has_size_info')|list %}
+            <td class="item-cat">{{ row.size_info or '—' }}</td>
+            <td class="num" title="Τιμή ανά 100g{% if row.normalized_price %}: {{ row.normalized_display }}{% endif %}">{{ row.normalized_display }}</td>
+            {% endif %}
           </tr>
           {% endfor %}
         </tbody>

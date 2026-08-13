@@ -26,6 +26,7 @@ from sqlalchemy import func
 from charts import line_chart
 from db import ItemPrice, SessionLocal, Snapshot, init_db
 from efood_client import fetch_menu_item, menu_item_url
+from price_utils import get_price_comparison_info
 from queries import (
     compare_across_shops,
     get_categories,
@@ -454,6 +455,12 @@ def compare():
         )
     finally:
         session.close()
+
+    # Add normalized price info to each row for comparison
+    for group in groups:
+        for row in group["rows"]:
+            comparison_info = get_price_comparison_info(row["price"], row.get("size_info"))
+            row.update(comparison_info)
 
     total = len(groups)
     pages = max(1, math.ceil(total / per_page))
