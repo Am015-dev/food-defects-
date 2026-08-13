@@ -185,6 +185,17 @@ pytest tests/
 
 `tests/test_rules.py` runs the rule engine against the golden fixtures from `docs/price-anomaly-tracker-spec.md` §11, plus one fixture per rule not covered there.
 
+## Triage dashboard
+
+A read-only Streamlit view over the cases database — the interactive triage surface from `docs/price-anomaly-tracker-spec.md` §10 (meter row, case cards with the reproduced price line and rule stamps, status/severity filters).
+
+```bash
+pip install -r requirements.txt
+streamlit run streamlit_app.py -- --db pricewatch.db
+```
+
+It only reads the local SQLite file `pricewatch.py scan` already writes — no network access of its own. Run a scan first if the DB is empty or missing.
+
 ## Schedule it
 
 ```cron
