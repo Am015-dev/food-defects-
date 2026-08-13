@@ -17,6 +17,15 @@ It looks for three things, every day, across every tracked shop:
   30-day low, badge and all, excluding sold-by-weight items where the
   reference price may have been recorded at a different purchase weight.
 
+Beyond bug-hunting, it's also a small price-comparison tool:
+
+- **`/search`** — full-catalog search across every tracked shop, sortable
+  by price, by unit price, or alphabetically.
+- **`/compare`** — the same product at different prices across shops,
+  with unit-price normalization so a 500g jar and a 1kg jar of the same
+  thing compare fairly.
+- **`/drops`** — products that got cheaper since the previous snapshot.
+
 Every product page also links back to e-food's own live API response, so
 any finding can be checked against the source directly.
 
@@ -27,13 +36,17 @@ ingest.py        -- fetches every tracked shop's catalog, stores a daily
                      snapshot, runs the bug/deal detection
 efood_client.py  -- thin HTTP client for e-food's public consumer API
 price_analysis.py-- the bug/deal detection rules themselves
-price_utils.py   -- price normalization (per-kg/lt/item) for fair
-                     cross-shop, cross-package-size comparison
+price_utils.py   -- price normalization (per-kg/lt/item) and accent-
+                     insensitive name folding for search
 db.py            -- SQLAlchemy models (Postgres in prod, SQLite locally)
 queries.py       -- all read-side queries, kept column-only / LIMIT'd
 webapp.py        -- Flask routes; templates/ + static/ hold the UI
-notify.py        -- optional email digest of current bugs (SMTP)
+retention.py     -- prunes item_prices rows past 90 days
+notify.py        -- optional email digest of current bugs (SMTP),
+                     plus the ingest-failure alert
 shops.py         -- the list of tracked shops (id, label, e-food slug)
+tests/           -- pytest: price_utils/price_analysis unit tests,
+                     Flask test-client route tests over a seeded SQLite DB
 ```
 
 **Why the split between a GitHub Actions ingest and a web service**: the
@@ -64,6 +77,13 @@ Set `DATABASE_URL` to point at Postgres instead; it defaults to a local
 SQLite file. For the email digest, set `SMTP_USER`, `SMTP_PASSWORD` (a
 Gmail [App Password](https://myaccount.google.com/apppasswords)), and
 `NOTIFY_EMAIL_TO`, then run `python3 notify.py`.
+
+Tests (`pip install -r requirements-dev.txt` first):
+
+```
+ruff check .
+pytest -q
+```
 
 ## Deployment
 
