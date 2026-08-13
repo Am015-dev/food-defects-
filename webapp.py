@@ -605,6 +605,9 @@ def verify_item(shop_id, code):
 
     session = SessionLocal()
     try:
+        # First, try to find the product in the latest snapshot. If not found,
+        # search back through recent snapshots in case a new snapshot was created
+        # after the dashboard link was clicked.
         snapshot = get_latest_snapshot(session, shop_id)
         stored = None
         snapshot_date = None
@@ -615,6 +618,24 @@ def verify_item(shop_id, code):
                 .filter(ItemPrice.snapshot_id == snapshot.id, ItemPrice.code == code)
                 .first()
             )
+            # If not in latest, search back 7 snapshots
+            if stored is None:
+                recent_snapshots = (
+                    session.query(Snapshot)
+                    .filter(Snapshot.shop_id == shop_id)
+                    .order_by(Snapshot.snapshot_date.desc())
+                    .limit(7)
+                    .all()
+                )
+                for snap in recent_snapshots:
+                    stored = (
+                        session.query(ItemPrice)
+                        .filter(ItemPrice.snapshot_id == snap.id, ItemPrice.code == code)
+                        .first()
+                    )
+                    if stored is not None:
+                        snapshot_date = snap.snapshot_date
+                        break
         history_rows = get_item_history_by_code(session, shop_id, code)
     finally:
         session.close()

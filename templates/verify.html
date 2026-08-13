@@ -3,8 +3,8 @@
 {% block content %}
 
 <div class="page-head">
-  <h1>{{ stored.name if stored else "Προϊόν" }}</h1>
-  <p class="sub">{{ shop_label }}{% if stored %} · {{ stored.category }}{% endif %}</p>
+  <h1>{{ stored.name if stored else (live.name if live else "Προϊόν") }}</h1>
+  <p class="sub">{{ shop_label }}{% if stored %} · {{ stored.category }}{% elif live.category %} · {{ live.category }}{% endif %}</p>
 </div>
 
 <section class="panel">
@@ -12,7 +12,7 @@
   {% if live_error %}
   <div class="error">Δεν ήταν δυνατή η επαλήθευση από το e-food: {{ live_error }}</div>
   {% else %}
-  <p class="meta">Νέο ερώτημα στο endpoint προϊόντος του e-food κατά τη φόρτωση της σελίδας — αυτή είναι η απάντησή τους τώρα, όχι το αποθηκευμένο αντίγραφό μας.</p>
+  <p class="meta">Νέο ερώτημα στο endpoint προϊόντος του e-food κατά τη φόρτωση της σελίδας — αυτή είναι η απάντησή τους τώρα{% if stored %}, σε σύγκριση με το αποθηκευμένο αντίγραφό μας{% else %} (κανένα αποθηκευμένο στιγμιότυπο για σύγκριση — ίσως το προϊόν αφαιρέθηκε από τα ευρήματα){% endif %}.</p>
   <div class="table-scroll">
     <table class="kv-compare">
       <thead>
