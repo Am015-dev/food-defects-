@@ -30,6 +30,10 @@
 </form>
 
 <section class="panel">
+  {% if scan_too_large %}
+  <div class="empty">Ο πλήρης κατάλογος είναι πλέον πολύ μεγάλος για σύγκριση χωρίς φίλτρο —
+  πληκτρολογήστε ένα προϊόν ή επιλέξτε κατηγορία παραπάνω.</div>
+  {% else %}
   <p class="meta">{{ total }} προϊόντα{% if total %} · σελίδα {{ page }} από {{ pages }}{% endif %}</p>
   {% if groups %}
   {% for g in groups %}
@@ -61,6 +65,7 @@
   </nav>
   {% else %}
   <div class="empty">Δεν υπάρχουν αρκετά δεδομένα για σύγκριση με αυτά τα φίλτρα.</div>
+  {% endif %}
   {% endif %}
 </section>
 

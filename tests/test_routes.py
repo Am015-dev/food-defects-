@@ -224,6 +224,33 @@ def test_compare_shows_cross_shop_spread(client, seeded):
     assert "1,68" in body or "1,68 €" in body
 
 
+def test_compare_guards_unfiltered_scan_past_threshold(client, seeded, monkeypatch):
+    # The seeded fixture stores 5 priced rows total -- well under any
+    # real threshold, so drop it low enough to force the guard on.
+    monkeypatch.setattr("webapp.COMPARE_SCAN_GUARD_ROWS", 1)
+    resp = client.get("/compare")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "πολύ μεγάλος για σύγκριση" in body
+    assert COMMON_PRODUCT not in body
+
+
+def test_compare_guard_bypassed_by_query(client, seeded, monkeypatch):
+    monkeypatch.setattr("webapp.COMPARE_SCAN_GUARD_ROWS", 1)
+    resp = client.get("/compare", query_string={"q": COMMON_PRODUCT})
+    body = resp.get_data(as_text=True)
+    assert "πολύ μεγάλος για σύγκριση" not in body
+    assert COMMON_PRODUCT in body
+
+
+def test_compare_guard_bypassed_by_category(client, seeded, monkeypatch):
+    monkeypatch.setattr("webapp.COMPARE_SCAN_GUARD_ROWS", 1)
+    resp = client.get("/compare", query_string={"category": "Τρόφιμα"})
+    body = resp.get_data(as_text=True)
+    assert "πολύ μεγάλος για σύγκριση" not in body
+    assert COMMON_PRODUCT in body
+
+
 @pytest.mark.parametrize(
     "params",
     [

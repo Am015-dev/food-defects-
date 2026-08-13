@@ -441,6 +441,15 @@ def deals():
     )
 
 
+# compare_across_shops scans every priced item in every shop's latest
+# snapshot -- fine at today's scale, but it grows with every tracked shop
+# (13 now, up from 12). Past this many rows, an unfiltered scan is
+# refused rather than run on every request; q or category narrows the
+# scan in SQL before anything is grouped, so either one sidesteps the
+# guard entirely.
+COMPARE_SCAN_GUARD_ROWS = 20000
+
+
 @app.route("/compare")
 def compare():
     q = (request.args.get("q") or "").strip() or None
@@ -453,8 +462,23 @@ def compare():
     try:
         latest = get_latest_snapshots_for_all_shops(session, list(SHOP_LABELS))
         categories = get_categories(session, [s.id for s in latest.values()])
-        groups = compare_across_shops(
-            session, SHOP_LABELS, min_spread_pct=min_spread, q=q, category=category
+
+        scan_too_large = False
+        if not q and not category and latest:
+            catalog_size = (
+                session.query(ItemPrice.id)
+                .filter(
+                    ItemPrice.snapshot_id.in_([s.id for s in latest.values()]),
+                    ItemPrice.price > 0,
+                )
+                .count()
+            )
+            scan_too_large = catalog_size > COMPARE_SCAN_GUARD_ROWS
+
+        groups = (
+            []
+            if scan_too_large
+            else compare_across_shops(session, SHOP_LABELS, min_spread_pct=min_spread, q=q, category=category)
         )
     finally:
         session.close()
@@ -482,6 +506,7 @@ def compare():
         q=q,
         category=category,
         min_spread=min_spread,
+        scan_too_large=scan_too_large,
     )
 
 
