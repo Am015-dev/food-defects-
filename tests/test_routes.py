@@ -9,6 +9,12 @@ from db import SessionLocal
 from ingest import store_snapshot
 from shops import SHOPS
 
+# Captured at collection time, before the autouse _no_outbound_refresh
+# fixture (conftest.py) monkeypatches webapp._shops_needing_refresh for
+# every test -- this reference is unaffected by that patch, so tests
+# that need the real logic can call it directly.
+from webapp import _shops_needing_refresh as _real_shops_needing_refresh
+
 SHOP_A = SHOPS[0]["id"]
 SHOP_A_LABEL = SHOPS[0]["label"]
 SHOP_B = SHOPS[1]["id"]
@@ -380,6 +386,43 @@ def test_item_page_cross_shop_comparison_survives_live_fetch_error(client, seede
     assert COMMON_PRODUCT in resp.get_data(as_text=True)
 
 
+def test_shops_needing_refresh_detects_missing_name_fold(client):
+    # Regression: _shops_needing_refresh only checked `code` for
+    # usability, so rows from before the name_fold/unit_price/
+    # metric_unit_description migration (code already populated, those
+    # three still NULL) were wrongly treated as fully usable -- a manual
+    # refresh wouldn't heal search or unit-price sorting until the next
+    # scheduled ingest overwrote the day's snapshot regardless.
+    from db import ItemPrice, Snapshot
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    session = SessionLocal()
+    try:
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, today, _catalog([_item(1, COMMON_PRODUCT, 1.0)]))
+        snap = session.query(Snapshot).filter_by(shop_id=SHOP_A, snapshot_date=today).one()
+        row = session.query(ItemPrice).filter_by(snapshot_id=snap.id).one()
+        assert row.code is not None  # sanity: code alone would have marked this usable
+        row.name_fold = None  # simulate a pre-migration row
+        session.commit()
+    finally:
+        session.close()
+
+    pending_ids = {s["id"] for s in _real_shops_needing_refresh()}
+    assert SHOP_A in pending_ids
+
+
+def test_shops_needing_refresh_skips_fully_usable_shop(client):
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    session = SessionLocal()
+    try:
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, today, _catalog([_item(1, COMMON_PRODUCT, 1.0)]))
+    finally:
+        session.close()
+
+    pending_ids = {s["id"] for s in _real_shops_needing_refresh()}
+    assert SHOP_A not in pending_ids
+
+
 def test_refresh_requires_post(client):
     resp = client.get("/refresh")
     assert resp.status_code == 405
@@ -418,6 +461,30 @@ def test_dashboard_stale_banner_shown_for_old_data(client):
 
         snap = session.query(Snapshot).filter_by(shop_id=SHOP_A).one()
         snap.fetched_at = datetime(2000, 1, 1, tzinfo=timezone.utc).replace(tzinfo=None)
+        session.commit()
+    finally:
+        session.close()
+
+    resp = client.get("/")
+    assert "δεδομένα μπορεί να είναι παλιά" in resp.get_data(as_text=True)
+
+
+def test_dashboard_stale_banner_not_masked_by_one_fresh_shop(client):
+    # Regression: is_stale used to be driven by MAX(fetched_at) across
+    # ALL shops, so one shop refreshing recently hid every other shop
+    # having gone stale. Shop A is old, shop B is fresh -- the banner
+    # must still show because shop A's own data is stale.
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session, SHOP_A, SHOP_A_LABEL, "2000-01-01", _catalog([_item(1, COMMON_PRODUCT, 1.0)])
+        )
+        store_snapshot(session, SHOP_B, SHOP_B_LABEL, TODAY, _catalog([_item(2, COMMON_PRODUCT, 1.0)]))
+
+        from db import Snapshot
+
+        old_snap = session.query(Snapshot).filter_by(shop_id=SHOP_A).one()
+        old_snap.fetched_at = datetime(2000, 1, 1, tzinfo=timezone.utc).replace(tzinfo=None)
         session.commit()
     finally:
         session.close()

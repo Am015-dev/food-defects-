@@ -203,10 +203,27 @@ def derive_unit_price(
     """Best-effort per-standard-unit price for storage/sorting: e-food's
     own metric_unit_description when present, else our own size_info
     parse. Returns (unit_price, unit_kind) or (None, None).
+
+    The two sources use different scales for the same physical quantity
+    -- e-food reports weight/volume per whole kg/lt, while our own
+    size_info fallback computes per-100g/100ml -- so a raw kg value and
+    a raw 100g value differ by a factor of 10 for the same real price.
+    Both are normalized to the 100g/100ml scale here so the stored
+    unit_price column is one consistent scale that SQL can sort by
+    (queries.get_deals_page / search_products ORDER BY unit_price).
+    Non-weight/volume units (τεμ, καψ, m, ...) are already "per one base
+    thing" on both sides and need no conversion; comparing *across*
+    different unit kinds (e.g. per-capsule vs per-meter) is inherently
+    apples-to-oranges regardless -- this only fixes the same-kind
+    (weight-vs-weight, volume-vs-volume) mismatch.
     """
-    unit_price, unit = parse_metric_unit_price(metric_unit_description)
-    if unit_price is not None:
-        return unit_price, unit
+    value, unit = parse_metric_unit_price(metric_unit_description)
+    if value is not None:
+        if unit == 'kg':
+            return value / 10, '100g'
+        elif unit == 'lt':
+            return value / 10, '100ml'
+        return value, unit
 
     if price is None or price <= 0:
         return None, None

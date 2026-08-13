@@ -119,13 +119,41 @@ def test_get_price_comparison_info_no_data():
 
 
 def test_derive_unit_price_prefers_metric_unit_description():
-    assert derive_unit_price(1.68, "500g", "3,36€ / kg") == (3.36, "kg")
+    # 3,36€/kg -> 0,336€/100g, normalized to the same scale the size_info
+    # fallback uses (see the weight-vs-weight regression test below).
+    unit_price, unit_kind = derive_unit_price(1.68, "500g", "3,36€ / kg")
+    assert unit_price == pytest.approx(0.336)
+    assert unit_kind == "100g"
+
+
+def test_derive_unit_price_normalizes_lt_to_100ml():
+    unit_price, unit_kind = derive_unit_price(1.98, "1l", "1,98€ / lt")
+    assert unit_price == pytest.approx(0.198)
+    assert unit_kind == "100ml"
+
+
+def test_derive_unit_price_non_weight_volume_unit_passes_through():
+    # τεμ/καψ/m/... are already "per one base thing" on both sides --
+    # no /10 conversion applies, unlike kg/lt.
+    unit_price, unit_kind = derive_unit_price(8.98, None, "8,98€ / τεμ.")
+    assert unit_price == pytest.approx(8.98)
+    assert unit_kind == "τεμ"
 
 
 def test_derive_unit_price_falls_back_to_size_info():
     unit_price, unit_kind = derive_unit_price(2.0, "500ml", None)
     assert unit_price == pytest.approx(0.40)
     assert unit_kind == "100ml"
+
+
+def test_derive_unit_price_metric_unit_description_and_size_info_fallback_are_same_scale():
+    # Regression: derive_unit_price used to return e-food's raw per-kg
+    # value alongside the fallback's per-100g value in the SAME column,
+    # a 10x scale mismatch that corrupted ORDER BY unit_price sorting
+    # whenever a result set mixed items with/without metric_unit_description.
+    from_metric, _ = derive_unit_price(1.68, "500g", "3,36€ / kg")
+    from_size_info, _ = derive_unit_price(1.68, "500g", None)
+    assert from_metric == pytest.approx(from_size_info)
 
 
 def test_derive_unit_price_none_when_nothing_parses():

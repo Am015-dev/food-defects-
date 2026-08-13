@@ -21,7 +21,7 @@ from flask import (
     request,
     url_for,
 )
-from sqlalchemy import text
+from sqlalchemy import func, text
 
 from charts import line_chart
 from db import ItemPrice, SessionLocal, Snapshot, init_db
@@ -121,12 +121,18 @@ def refresh_status():
 def _shops_needing_refresh():
     """Shops whose stored data for today (UTC) is missing or unusable.
 
-    A snapshot also counts as stale if its rows carry no item code. That
-    happens after the schema gains a column an older ingest didn't fill:
-    the data looks present, so a plain date check would never re-fetch
-    it, and features depending on the new column would stay broken until
-    the next calendar day. Checking usability instead of mere existence
-    lets a manual refresh heal that.
+    A snapshot also counts as stale if its rows carry no item code, or no
+    name_fold. That happens after the schema gains a column an older
+    ingest didn't fill: the data looks present, so a plain date check
+    would never re-fetch it, and features depending on the new column
+    would stay broken until the next calendar day. Checking usability
+    instead of mere existence lets a manual refresh heal that.
+
+    name_fold specifically (rather than unit_price/metric_unit_description,
+    which are legitimately NULL for many real rows even after a complete
+    ingest) is the reliable migration-completeness marker: every row gets
+    a non-empty name, so fold_name(name) is never null on a row ingested
+    after name_fold existed -- NULL there means the row predates it.
     """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     session = SessionLocal()
@@ -135,12 +141,16 @@ def _shops_needing_refresh():
         for shop_id, snapshot_id in session.query(Snapshot.shop_id, Snapshot.id).filter(
             Snapshot.snapshot_date == today
         ):
-            has_code = (
+            has_usable_row = (
                 session.query(ItemPrice.id)
-                .filter(ItemPrice.snapshot_id == snapshot_id, ItemPrice.code.isnot(None))
+                .filter(
+                    ItemPrice.snapshot_id == snapshot_id,
+                    ItemPrice.code.isnot(None),
+                    ItemPrice.name_fold.isnot(None),
+                )
                 .first()
             )
-            if has_code:
+            if has_usable_row:
                 usable_ids.add(shop_id)
     finally:
         session.close()
@@ -361,8 +371,13 @@ def dashboard():
             per_page=30,
         )
         trend_rows = get_trend(session)
-        newest_fetch = (
-            session.query(Snapshot.fetched_at).order_by(Snapshot.fetched_at.desc()).limit(1).first()
+        # Per-shop, not a global MAX(fetched_at) -- one shop refreshing
+        # recently must not hide the other 12 having gone stale.
+        per_shop_newest = dict(
+            session.query(Snapshot.shop_id, func.max(Snapshot.fetched_at))
+            .filter(Snapshot.shop_id.in_(list(SHOP_LABELS)))
+            .group_by(Snapshot.shop_id)
+            .all()
         )
         price_drops = get_price_drops(session, SHOP_LABELS)[:5]
     finally:
@@ -370,11 +385,19 @@ def dashboard():
 
     last_updated = max((r["snapshot_date"] for r in ok_results if r.get("snapshot_date")), default=None)
 
+    # Shops that have never had a snapshot at all get their own "no
+    # data yet" empty-state per shop-card further down the page -- this
+    # banner is specifically about shops that DO have data going stale,
+    # so it's driven by the oldest of each (present) shop's own newest
+    # snapshot, not a global MAX that one fresh shop could dominate.
     is_stale = False
-    if newest_fetch and newest_fetch[0]:
+    if per_shop_newest:
+        oldest_of_the_newest = min(per_shop_newest.values())
         # fetched_at is stored naive (see ingest.py) but always as a UTC
         # wall-clock value, so compare against a naive UTC "now" too.
-        age_hours = (datetime.now(timezone.utc).replace(tzinfo=None) - newest_fetch[0]).total_seconds() / 3600
+        age_hours = (
+            datetime.now(timezone.utc).replace(tzinfo=None) - oldest_of_the_newest
+        ).total_seconds() / 3600
         is_stale = age_hours > STALE_AFTER_HOURS
 
     return render_template(
