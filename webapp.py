@@ -413,7 +413,7 @@ HISTORY_TEMPLATE = (
       {% endfor %}
     </table>
     {% else %}
-    <div class="empty">No snapshots stored yet for this shop -- the daily ingest job hasn't run yet. Run <code>python ingest.py</code> to backfill one now.</div>
+    <div class="empty">No snapshots stored yet for this shop. Run the "Daily catalog ingest" workflow from the repository's Actions tab to populate it.</div>
     {% endif %}
   </div>
 </main>
@@ -465,7 +465,7 @@ COMPARE_TEMPLATE = (
     </div>
     {% endfor %}
     {% else %}
-    <div class="empty">Not enough saved snapshots yet across shops to compare. Run <code>python ingest.py</code> first.</div>
+    <div class="empty">Not enough saved snapshots yet across shops to compare. Run the "Daily catalog ingest" workflow from the repository's Actions tab first.</div>
     {% endif %}
   </div>
 </main>
