@@ -105,6 +105,25 @@ def _add_missing_columns():
         print("db: added item_prices.code")
 
 
+def _ensure_indexes():
+    """Idempotent index creation, same forward-only philosophy as
+    _add_missing_columns(). The filterable pages (deals, dashboard search,
+    compare) all hit item_prices by snapshot with extra predicates, and
+    the staleness check hits snapshots by (shop, date) on every page load.
+    CREATE INDEX IF NOT EXISTS is understood by both SQLite and Postgres.
+    """
+    from sqlalchemy import text
+
+    statements = [
+        "CREATE INDEX IF NOT EXISTS ix_item_prices_snapshot ON item_prices (snapshot_id)",
+        "CREATE INDEX IF NOT EXISTS ix_item_prices_snapshot_category ON item_prices (snapshot_id, category)",
+        "CREATE INDEX IF NOT EXISTS ix_snapshots_shop_date ON snapshots (shop_id, snapshot_date)",
+    ]
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 def init_db(retries=5, delay_seconds=2):
     """Create tables if they don't exist yet. Retries briefly: on a fresh
     deploy the web service can start importing before a just-provisioned
@@ -114,6 +133,7 @@ def init_db(retries=5, delay_seconds=2):
         try:
             Base.metadata.create_all(engine)
             _add_missing_columns()
+            _ensure_indexes()
             return
         except Exception as exc:  # noqa: BLE001
             last_exc = exc

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}{{ label }} · Ιστορικό — Παρατηρητήριο Τιμών{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>{{ label }} — ημερήσιο ιστορικό</h1>
+  <p class="sub">Μία γραμμή για κάθε ημέρα με αποθηκευμένο στιγμιότυπο.</p>
+</div>
+
+{% if charts %}
+<section class="panel">
+  <h2>Εξέλιξη ευρημάτων</h2>
+  <div class="chart-grid">
+    <div>
+      <h3 class="chart-title">Σφάλματα</h3>
+      <div class="chart-block">{{ charts.bugs|safe }}</div>
+    </div>
+    <div>
+      <h3 class="chart-title">Επαληθευμένες προσφορές</h3>
+      <div class="chart-block">{{ charts.deals|safe }}</div>
+    </div>
+  </div>
+</section>
+{% elif rows|length == 1 %}
+<section class="panel">
+  <p class="chart-note">Το γράφημα θα εμφανιστεί όταν συγκεντρωθούν δεδομένα από 2+ ημέρες.</p>
+</section>
+{% endif %}
+
+<section class="panel">
+  {% if rows %}
+  <div class="table-scroll">
+    <table class="cards-mobile">
+      <thead>
+        <tr><th>Ημερομηνία</th><th>Προϊόντα</th><th>Μηδενικές τιμές</th><th>Πλασματικές κατώτατες</th><th>Επαληθ. προσφορές</th></tr>
+      </thead>
+      <tbody>
+        {% for s in rows %}
+        <tr>
+          <td class="td-main num">{{ s.snapshot_date|grdate }}</td>
+          <td data-label="Προϊόντα" class="num">{{ s.total_items }}</td>
+          <td data-label="Μηδενικές τιμές" class="num">{{ s.zero_price_bug_count }}</td>
+          <td data-label="Πλασματικές κατώτατες" class="num">{{ s.placeholder_bug_count }}</td>
+          <td data-label="Επαληθ. προσφορές" class="num">{{ s.verified_deal_count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty">Δεν υπάρχουν ακόμη στιγμιότυπα για αυτό το κατάστημα — θα ληφθούν αυτόματα.</div>
+  {% endif %}
+</section>
+
+{% endblock %}

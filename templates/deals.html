@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Προσφορές — Παρατηρητήριο Τιμών{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Όλες οι επαληθευμένες προσφορές</h1>
+  <p class="sub">Προϊόντα σταθερής συσκευασίας, τουλάχιστον 20% κάτω από την πραγματική κατώτατη τιμή 30 ημερών.</p>
+</div>
+
+<form class="filters" method="get" action="/deals">
+  <label class="grow wide">Αναζήτηση προϊόντος
+    <input type="search" name="q" value="{{ q or '' }}" placeholder="π.χ. κρασί, οδοντόβουρτσα…">
+  </label>
+  <label>Κατάστημα
+    <select name="shop">
+      <option value="">Όλα</option>
+      {% for s in shop_nav %}
+      <option value="{{ s.id }}" {% if shop_filter == s.id %}selected{% endif %}>{{ s.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Κατηγορία
+    <select name="category">
+      <option value="">Όλες</option>
+      {% for c in categories %}
+      <option value="{{ c }}" {% if category == c %}selected{% endif %}>{{ c }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Ελάχιστη έκπτωση
+    <select name="min_pct">
+      <option value="">20%+</option>
+      {% for p in (30, 40, 50) %}
+      <option value="{{ p }}" {% if min_pct == p %}selected{% endif %}>{{ p }}%+</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Ταξινόμηση
+    <select name="sort">
+      <option value="pct" {% if sort == 'pct' %}selected{% endif %}>Μεγαλύτερη έκπτωση</option>
+      <option value="price" {% if sort == 'price' %}selected{% endif %}>Φθηνότερα πρώτα</option>
+      <option value="name" {% if sort == 'name' %}selected{% endif %}>Αλφαβητικά</option>
+    </select>
+  </label>
+  <button type="submit" class="js-hide">Εφαρμογή</button>
+</form>
+
+<section class="panel">
+  <p class="meta">{{ total }} προσφορές{% if total %} · σελίδα {{ page }} από {{ pages }}{% endif %}</p>
+  {% if rows %}
+  <div class="table-scroll">
+    <table class="cards-mobile">
+      <thead>
+        <tr><th>Προϊόν</th><th>Κατάστημα</th><th>Κατηγορία</th><th data-sort>Τιμή</th><th>Αρχική</th><th data-sort>Έκπτωση</th></tr>
+      </thead>
+      <tbody>
+        {% for d in rows %}
+        <tr>
+          <td class="td-main">{% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
+          <td data-label="Κατάστημα"><span class="item-cat">{{ d.shop_label }}</span></td>
+          <td data-label="Κατηγορία"><span class="item-cat">{{ d.category }}</span></td>
+          <td data-label="Τιμή" class="price-now">{{ d.price|eur }}</td>
+          <td data-label="Αρχική" class="price-was">{{ d.full_price|eur }}</td>
+          <td data-label="Έκπτωση" class="pct">-{{ "%.0f"|format(d.pct) }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <nav class="pagination" aria-label="Σελιδοποίηση">
+    {% if page > 1 %}<a href="{{ page_url(page - 1) }}">← Προηγούμενη</a>{% else %}<span class="disabled">← Προηγούμενη</span>{% endif %}
+    <span class="page-info">Σελίδα {{ page }} από {{ pages }}</span>
+    {% if page < pages %}<a href="{{ page_url(page + 1) }}">Επόμενη →</a>{% else %}<span class="disabled">Επόμενη →</span>{% endif %}
+  </nav>
+  {% else %}
+  <div class="empty">Καμία προσφορά με αυτά τα φίλτρα.</div>
+  {% endif %}
+</section>
+
+{% endblock %}

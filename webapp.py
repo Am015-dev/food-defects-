@@ -1,23 +1,41 @@
-"""Dashboard: pricing bugs and verified deals across several Masoutis
-storefronts on e-food.gr, backed by daily snapshots in the database
-(see ingest.py / db.py), with historical and cross-shop comparison views.
+"""Παρατηρητήριο Τιμών: pricing bugs and verified deals across the
+supermarkets around Chalandri on e-food.gr, backed by daily snapshots in
+the database (see ingest.py / db.py). Templates live in templates/,
+styles in static/ -- this module is routes and filter parsing only.
 """
 
 import csv
 import io
+import math
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-from flask import Flask, Response, abort, jsonify, render_template_string, request
+from flask import (
+    Flask,
+    Response,
+    abort,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
+from sqlalchemy import func
 
+from charts import line_chart
 from db import ItemPrice, SessionLocal, Snapshot, init_db
 from efood_client import fetch_menu_item, menu_item_url
 from queries import (
     compare_across_shops,
-    get_flagged_items,
+    get_categories,
+    get_deals_page,
+    get_flagged_items_filtered,
     get_history,
+    get_item_history_by_code,
     get_latest_snapshot,
+    get_latest_snapshots_for_all_shops,
+    get_trend,
     iter_all_sales,
 )
 from shops import SHOP_URLS, SHOPS
@@ -33,8 +51,45 @@ except Exception as exc:  # noqa: BLE001
 
 SHOP_LABELS = {s["id"]: s["label"] for s in SHOPS}
 
+CHART_SERIES = {
+    "zero": {"label": "Μηδενικές", "color": "var(--chart-red)", "dash": ""},
+    "deals": {"label": "Προσφορές", "color": "var(--chart-green)", "dash": "6 3"},
+    "placeholder": {"label": "Πλασματικές", "color": "var(--chart-amber)", "dash": "2 3"},
+}
 
-# --- Self-population -------------------------------------------------
+
+# ---------- Jinja helpers ----------
+
+
+@app.template_filter("eur")
+def format_eur(value):
+    if value is None:
+        return "—"
+    text = f"{value:,.2f}".replace(",", " ").replace(".", ",")
+    return f"{text} €"
+
+
+@app.template_filter("grdate")
+def format_gr_date(value):
+    if not value:
+        return "—"
+    parts = str(value).split("-")
+    if len(parts) == 3:
+        return f"{parts[2]}/{parts[1]}/{parts[0]}"
+    return str(value)
+
+
+@app.context_processor
+def inject_globals():
+    def page_url(page):
+        args = request.args.to_dict()
+        args["page"] = page
+        return url_for(request.endpoint, **args)
+
+    return {"shop_nav": SHOPS, "page_url": page_url}
+
+
+# ---------- Self-population -------------------------------------------
 #
 # The dashboard keeps itself current without any external scheduler.
 # Render's free tier has no cron service, so when a page load notices
@@ -148,16 +203,18 @@ def maybe_start_refresh():
     return True
 
 
-def view_from_snapshot(session, shop_id, label, snapshot):
+# ---------- Per-shop views ----------
+
+
+def view_from_snapshot(session, shop_id, label, snapshot, q=None, bug_type=None):
     # Only the bug/deal rows -- a shop's full catalog can be 10,000+ rows,
     # and loading all of that as ORM objects just to filter down to a
-    # handful in Python is what was pushing memory over Render's 512MB cap.
-    items = get_flagged_items(session, snapshot.id)
+    # handful in Python is what once pushed memory over Render's 512MB cap.
+    items = get_flagged_items_filtered(session, snapshot.id, q=q, bug_type=bug_type)
     return {
         "ok": True,
         "id": shop_id,
         "label": label,
-        "source": "db",
         "snapshot_date": snapshot.snapshot_date,
         "title": snapshot.store_title,
         "address": snapshot.store_address,
@@ -201,22 +258,14 @@ def view_from_snapshot(session, shop_id, label, snapshot):
 
 
 def empty_view(shop_id, label):
-    """Shown when a shop has no stored snapshot yet.
-
-    This deliberately does NOT fall back to fetching the shop's catalog
-    live. Doing that used up ~460MB on a single request with an empty
-    database (12 shops x a ~15MB JSON catalog, several times that once
-    parsed, all fetched concurrently) and is what kept getting this
-    service OOM-killed on a 512MB instance. The web service now only
-    ever reads pre-digested rows out of the database; fetching catalogs
-    is the ingest job's business, and it runs elsewhere.
-    """
+    """Shown when a shop has no stored snapshot yet. Deliberately does
+    NOT fall back to fetching the catalog live -- that once cost ~460MB
+    on a single request and kept OOM-killing this 512MB service."""
     return {
         "ok": True,
         "no_data": True,
         "id": shop_id,
         "label": label,
-        "source": "none",
         "snapshot_date": None,
         "title": label,
         "address": None,
@@ -229,7 +278,7 @@ def empty_view(shop_id, label):
     }
 
 
-def get_shop_view(shop_id, label):
+def get_shop_view(shop_id, label, q=None, bug_type=None):
     # Each call gets its own session -- SQLAlchemy sessions aren't
     # thread-safe, and this runs concurrently across shops.
     session = SessionLocal()
@@ -237,404 +286,69 @@ def get_shop_view(shop_id, label):
         snapshot = get_latest_snapshot(session, shop_id)
         if snapshot is None:
             return empty_view(shop_id, label)
-        return view_from_snapshot(session, shop_id, label, snapshot)
+        return view_from_snapshot(session, shop_id, label, snapshot, q=q, bug_type=bug_type)
     finally:
         session.close()
 
 
-def get_all_shop_views():
-    # Bounded pool: these are small indexed reads now, but one DB
-    # connection per shop simultaneously is still needless pressure on a
-    # free-tier Postgres connection limit.
-    results = [None] * len(SHOPS)
+def get_all_shop_views(shop_ids=None, q=None, bug_type=None):
+    selected = [s for s in SHOPS if shop_ids is None or s["id"] in shop_ids]
+    results = [None] * len(selected)
     with ThreadPoolExecutor(max_workers=4) as pool:
         future_to_index = {
-            pool.submit(get_shop_view, shop["id"], shop["label"]): i
-            for i, shop in enumerate(SHOPS)
+            pool.submit(get_shop_view, shop["id"], shop["label"], q, bug_type): i
+            for i, shop in enumerate(selected)
         }
         for future in as_completed(future_to_index):
             results[future_to_index[future]] = future.result()
     return results
 
 
-BASE_STYLE = """
-<style>
-  :root {
-    --bg: #0f1115; --panel: #171a21; --border: #262b36;
-    --text: #e8eaed; --muted: #9aa4b2;
-    --bad: #ff6b6b; --bad-bg: #2a1518;
-    --warn: #ffb454; --warn-bg: #2a2015;
-    --good: #4ade80; --good-bg: #12261a;
-    --accent: #7dd3fc;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  }
-  header { padding: 28px 24px 8px; max-width: 1100px; margin: 0 auto; }
-  header h1 { margin: 0 0 6px; font-size: 22px; }
-  header p { margin: 0; color: var(--muted); font-size: 13.5px; }
-  nav { max-width: 1100px; margin: 16px auto 0; padding: 0 24px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  nav a {
-    color: var(--accent); text-decoration: none; font-size: 13px;
-    border: 1px solid var(--border); padding: 5px 10px; border-radius: 999px;
-  }
-  nav a:hover { border-color: var(--accent); }
-  nav .sep { color: var(--border); }
-  main { max-width: 1100px; margin: 0 auto; padding: 16px 24px 60px; }
-  .shop, .panel {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-    padding: 20px 22px; margin: 18px 0;
-  }
-  .shop h2, .panel h2 { margin: 0 0 2px; font-size: 18px; }
-  .panel > p.meta { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
-  .btn { display: inline-block; background: var(--good-bg); color: var(--good); border: 1px solid var(--good);
-    padding: 8px 14px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 13.5px; }
-  .btn:hover { filter: brightness(1.15); }
-  .shop .meta { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
-  .stats { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 14px; font-size: 13px; color: var(--muted); }
-  .stats b { color: var(--text); }
-  .error { background: var(--bad-bg); border: 1px solid var(--bad); color: var(--bad);
-    padding: 10px 12px; border-radius: 8px; font-size: 13.5px; }
-  .source-tag { display: inline-block; font-size: 11px; color: var(--muted); border: 1px solid var(--border);
-    border-radius: 999px; padding: 1px 8px; margin-left: 6px; }
-  .section { margin-top: 14px; }
-  .section h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
-    margin: 0 0 8px; color: var(--muted); }
-  .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
-  .badge.bad { background: var(--bad-bg); color: var(--bad); }
-  .badge.warn { background: var(--warn-bg); color: var(--warn); }
-  .badge.good { background: var(--good-bg); color: var(--good); }
-  ul.items { list-style: none; margin: 0; padding: 0; }
-  ul.items li { padding: 6px 0; border-top: 1px solid var(--border); font-size: 13.5px; }
-  ul.items li:first-child { border-top: none; }
-  .item-cat { color: var(--muted); font-size: 12px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-  table th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px;
-    padding: 4px 8px; border-bottom: 1px solid var(--border); }
-  table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
-  table tr:last-child td { border-bottom: none; }
-  .pct { color: var(--good); font-weight: 700; }
-  .price-was { color: var(--muted); text-decoration: line-through; }
-  .price-now { font-weight: 700; }
-  .empty { color: var(--muted); font-size: 13px; font-style: italic; }
-  ul.items a, table a, .panel p a { color: var(--accent); text-decoration: none; }
-  ul.items a:hover, table a:hover, .panel p a:hover { text-decoration: underline; }
-  footer { max-width: 1100px; margin: 0 auto; padding: 0 24px 40px; color: var(--muted); font-size: 12px; }
-  footer a { color: var(--accent); }
-</style>
-"""
+# ---------- Charts ----------
 
-NAV = """
-<nav>
-  <a href="/">Dashboard</a>
-  <a href="/compare">Compare across shops</a>
-  <span class="sep">|</span>
-  {% for s in shop_nav %}
-  <a href="/history/{{ s.id }}">{{ s.label }} history</a>
-  {% endfor %}
-</nav>
-"""
 
-DASHBOARD_TEMPLATE = (
-    """
-<!doctype html>
-<html lang="el">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Masoutis price-defect dashboard</title>
-"""
-    + BASE_STYLE
-    + """
-</head>
-<body>
-<header>
-  <h1>\U0001F6D2 Masoutis price-defect dashboard</h1>
-  <p>Backed by daily snapshots across {{ shops|length }} storefronts, refreshed automatically when the day's data is missing.</p>
-</header>
-"""
-    + NAV
-    + """
-<main>
-  {% if refresh.running %}
-  <section class="panel" style="border-color: var(--warn);">
-    <h2>⏳ Fetching fresh data&hellip;</h2>
-    <p class="meta">
-      {{ refresh.done }} of {{ refresh.total }} shops done. Shops are fetched one at a
-      time to stay inside this instance's memory limit, so a full refresh takes a
-      minute or two. This page reloads itself until it's finished.
-    </p>
-  </section>
-  <meta http-equiv="refresh" content="15">
-  {% endif %}
+def build_counts_charts(rows):
+    """rows: [{date, zero, placeholder, deals}] -> {"bugs": svg, "deals": svg}.
 
-  <section class="panel" id="bugs-summary">
-    <h2>\U0001F41B Bugs found right now</h2>
-    <p class="meta">Across all {{ shops|length }} shops' latest saved snapshot.</p>
+    Two separate charts on purpose: deal counts run in the thousands
+    while bug counts run in the tens, and a shared y-scale would flatten
+    the bug series into an unreadable baseline (the classic
+    two-measures-one-axis mistake)."""
+    if len(rows) < 2:
+        return None
 
-    <div class="section">
-      <h3><span class="badge bad">Bug</span> Zero-priced listings ({{ bugs.zero_price|length }})</h3>
-      {% if bugs.zero_price %}
-      <ul class="items">
-        {% for it in bugs.zero_price %}
-        <li>
-          {% if it.code %}<a href="/item/{{ it.shop_id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
-          <span class="item-cat">&middot; {{ it.shop_label }} &middot; {{ it.category }}</span>
-        </li>
-        {% endfor %}
-      </ul>
-      {% else %}
-      <div class="empty">None found.</div>
-      {% endif %}
-    </div>
+    def series_for(keys):
+        return [
+            {
+                "label": CHART_SERIES[key]["label"],
+                "color": CHART_SERIES[key]["color"],
+                "dash": CHART_SERIES[key]["dash"],
+                "points": [(format_gr_date(r["date"]), r[key]) for r in rows],
+            }
+            for key in keys
+        ]
 
-    <div class="section">
-      <h3><span class="badge warn">Bug</span> Placeholder 30-day-low reference price (&euro;0.01) ({{ bugs.placeholder|length }})</h3>
-      {% if bugs.placeholder %}
-      <ul class="items">
-        {% for it in bugs.placeholder[:20] %}
-        <li>
-          {% if it.code %}<a href="/item/{{ it.shop_id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
-          <span class="item-cat">&middot; {{ it.shop_label }} &middot; {{ it.category }} &middot; now {{ "%.2f"|format(it.price) }}&euro;</span>
-        </li>
-        {% endfor %}
-      </ul>
-      {% if bugs.placeholder|length > 20 %}
-      <div class="empty">&hellip; and {{ bugs.placeholder|length - 20 }} more</div>
-      {% endif %}
-      {% else %}
-      <div class="empty">None found.</div>
-      {% endif %}
-    </div>
-  </section>
+    return {
+        "bugs": line_chart(series_for(["zero", "placeholder"]), height=160, y_zero=True),
+        "deals": line_chart(series_for(["deals"]), height=160, y_zero=True, area=True),
+    }
 
-  <section class="panel" id="bargains">
-    <h2>\U0001F4B0 Really good bargains right now</h2>
-    <p class="meta">Fixed-size items verified 20%+ below their real 30-day low (not just the "was" price), ranked across all shops.</p>
-    {% if bargains %}
-    <table>
-      <tr><th>Item</th><th>Shop</th><th>Category</th><th>Now</th><th>Was</th><th>Below 30d-low</th></tr>
-      {% for d in bargains %}
-      <tr>
-        <td>{% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
-        <td>{{ d.shop_label }}</td>
-        <td class="item-cat">{{ d.category }}</td>
-        <td class="price-now">{{ "%.2f"|format(d.price) }}&euro;</td>
-        <td class="price-was">{{ "%.2f"|format(d.full_price) }}&euro;</td>
-        <td class="pct">-{{ "%.0f"|format(d.pct) }}%</td>
-      </tr>
-      {% endfor %}
-    </table>
-    {% else %}
-    <div class="empty">None found yet.</div>
-    {% endif %}
-  </section>
 
-  <section class="panel" id="export">
-    <h2>\U0001F4E5 Export</h2>
-    <p class="meta">Every item currently showing a discount badge, across all shops -- broader than the verified bargains above, with both the official % off and the % vs the real 30-day low so you can judge which are genuine.</p>
-    <a class="btn" href="/download/sales.csv">Download all sale cases (CSV)</a>
-  </section>
-
-  {% for r in shops %}
-  <section class="shop" id="shop-{{ r.id }}">
-    {% if r.no_data %}
-      <h2>{{ r.label }} <span class="source-tag">no data yet</span></h2>
-      <div class="empty">No snapshot stored for this shop yet. Run the "Daily catalog ingest" workflow to populate it.</div>
-    {% elif r.ok %}
-      <h2>{{ r.title }} <span class="meta">&mdash; {{ r.label }}</span>
-        <span class="source-tag">{{ r.snapshot_date }}</span>
-      </h2>
-      <div class="meta">{{ r.address }} &middot; {{ "Open now" if r.is_open else "Closed" }}</div>
-      <div class="stats">
-        <span><b>{{ r.total_categories }}</b> categories</span>
-        <span><b>{{ r.total_items }}</b> products</span>
-        <span><b>{{ r.zero_price_bugs|length }}</b> zero-price bugs</span>
-        <span><b>{{ r.placeholder_bugs|length }}</b> placeholder-price bugs</span>
-        <span><b>{{ r.verified_deals|length }}</b> verified deals &ge;20%</span>
-      </div>
-
-      <div class="section">
-        <h3><span class="badge bad">Bug</span> Zero-priced listings</h3>
-        {% if r.zero_price_bugs %}
-        <ul class="items">
-          {% for it in r.zero_price_bugs %}
-          <li>{{ it.name }} <span class="item-cat">&middot; {{ it.category }}</span></li>
-          {% endfor %}
-        </ul>
-        {% else %}
-        <div class="empty">None found.</div>
-        {% endif %}
-      </div>
-
-      <div class="section">
-        <h3><span class="badge warn">Bug</span> Placeholder 30-day-low reference price (&euro;0.01)</h3>
-        {% if r.placeholder_bugs %}
-        <ul class="items">
-          {% for it in r.placeholder_bugs[:10] %}
-          <li>{{ it.name }} <span class="item-cat">&middot; {{ it.category }} &middot; now {{ "%.2f"|format(it.price) }}&euro;</span></li>
-          {% endfor %}
-        </ul>
-        {% if r.placeholder_bugs|length > 10 %}
-        <div class="empty">&hellip; and {{ r.placeholder_bugs|length - 10 }} more</div>
-        {% endif %}
-        {% else %}
-        <div class="empty">None found.</div>
-        {% endif %}
-      </div>
-
-      <div class="section">
-        <h3><span class="badge good">Verified deal</span> Genuinely priced below the real 30-day low</h3>
-        {% if r.verified_deals %}
-        <table>
-          <tr><th>Item</th><th>Category</th><th>Now</th><th>Was</th><th>Below 30d-low</th></tr>
-          {% for d in r.verified_deals[:15] %}
-          <tr>
-            <td>{% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
-            <td class="item-cat">{{ d.category }}</td>
-            <td class="price-now">{{ "%.2f"|format(d.price) }}&euro;</td>
-            <td class="price-was">{{ "%.2f"|format(d.full_price) }}&euro;</td>
-            <td class="pct">-{{ "%.0f"|format(d.pct) }}%</td>
-          </tr>
-          {% endfor %}
-        </table>
-        {% if r.verified_deals|length > 15 %}
-        <div class="empty">&hellip; and {{ r.verified_deals|length - 15 }} more</div>
-        {% endif %}
-        {% else %}
-        <div class="empty">None found.</div>
-        {% endif %}
-      </div>
-    {% else %}
-      <h2>{{ r.label }}</h2>
-      <div class="error">Failed to fetch this store: {{ r.error }}</div>
-    {% endif %}
-  </section>
-  {% endfor %}
-</main>
-<footer>
-  Personal price-tracking tool against e-food.gr's public consumer API. Not affiliated with e-food or Masoutis.
-  Source: <a href="https://github.com/am015-dev/food-defects-">food-defects-</a>
-</footer>
-</body>
-</html>
-"""
-)
-
-HISTORY_TEMPLATE = (
-    """
-<!doctype html>
-<html lang="el">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ label }} - history</title>
-"""
-    + BASE_STYLE
-    + """
-</head>
-<body>
-<header>
-  <h1>{{ label }} &mdash; daily history</h1>
-  <p>One row per day this shop was ingested.</p>
-</header>
-"""
-    + NAV
-    + """
-<main>
-  <div class="panel">
-    {% if rows %}
-    <table>
-      <tr><th>Date</th><th>Products</th><th>Categories</th><th>Zero-price bugs</th><th>Placeholder-price bugs</th><th>Verified deals</th></tr>
-      {% for s in rows %}
-      <tr>
-        <td>{{ s.snapshot_date }}</td>
-        <td>{{ s.total_items }}</td>
-        <td>{{ s.total_categories }}</td>
-        <td>{{ s.zero_price_bug_count }}</td>
-        <td>{{ s.placeholder_bug_count }}</td>
-        <td>{{ s.verified_deal_count }}</td>
-      </tr>
-      {% endfor %}
-    </table>
-    {% else %}
-    <div class="empty">No snapshots stored yet for this shop. Run the "Daily catalog ingest" workflow from the repository's Actions tab to populate it.</div>
-    {% endif %}
-  </div>
-</main>
-<footer>
-  Source: <a href="https://github.com/am015-dev/food-defects-">food-defects-</a>
-</footer>
-</body>
-</html>
-"""
-)
-
-COMPARE_TEMPLATE = (
-    """
-<!doctype html>
-<html lang="el">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Compare across shops</title>
-"""
-    + BASE_STYLE
-    + """
-</head>
-<body>
-<header>
-  <h1>Same product, different price</h1>
-  <p>Products found (by exact name match) in at least 2 shops' latest snapshot, where price differs by 5%+ between the cheapest and priciest branch.</p>
-</header>
-"""
-    + NAV
-    + """
-<main>
-  <div class="panel">
-    {% if groups %}
-    {% for g in groups[:100] %}
-    <div class="section">
-      <h3>{{ g.name }} <span class="item-cat">&middot; {{ g.category }}</span>
-        <span class="pct" style="margin-left:8px">+{{ "%.0f"|format(g.spread_pct) }}% spread</span>
-      </h3>
-      <table>
-        <tr><th>Shop</th><th>Price</th></tr>
-        {% for row in g.rows %}
-        <tr>
-          <td>{{ row.shop_label }}</td>
-          <td class="{{ 'price-now' if row.price == g.low else '' }}">{{ "%.2f"|format(row.price) }}&euro;</td>
-        </tr>
-        {% endfor %}
-      </table>
-    </div>
-    {% endfor %}
-    {% else %}
-    <div class="empty">Not enough saved snapshots yet across shops to compare. Run the "Daily catalog ingest" workflow from the repository's Actions tab first.</div>
-    {% endif %}
-  </div>
-</main>
-<footer>
-  Source: <a href="https://github.com/am015-dev/food-defects-">food-defects-</a>
-</footer>
-</body>
-</html>
-"""
-)
+# ---------- Routes ----------
 
 
 @app.route("/")
 def dashboard():
-    # Top up today's data in the background if it's missing or partial.
     maybe_start_refresh()
 
-    # Each shop's items are already fetched once here; derive the
-    # cross-shop bugs/bargains summaries from that instead of re-querying
-    # the database per shop again (that redundancy was the dashboard's
-    # main cost once tracking more than a handful of shops).
-    results = get_all_shop_views()
+    shop_filter = request.args.get("shop", type=int)
+    q = (request.args.get("q") or "").strip() or None
+    bug_type = request.args.get("type") or None
+    if bug_type not in (None, "zero", "placeholder", "deal"):
+        bug_type = None
+
+    shop_ids = [shop_filter] if shop_filter in SHOP_LABELS else None
+    results = get_all_shop_views(shop_ids=shop_ids, q=q, bug_type=bug_type)
     ok_results = [r for r in results if r["ok"]]
 
     bugs = {
@@ -645,19 +359,151 @@ def dashboard():
             {**it, "shop_label": r["label"]} for r in ok_results for it in r["placeholder_bugs"]
         ],
     }
-    bargains = sorted(
-        ({**d, "shop_label": r["label"]} for r in ok_results for d in r["verified_deals"]),
-        key=lambda d: d["pct"],
-        reverse=True,
-    )[:30]
 
-    return render_template_string(
-        DASHBOARD_TEMPLATE,
+    session = SessionLocal()
+    try:
+        bargains, total_deals = get_deals_page(
+            session,
+            SHOP_LABELS,
+            shop_id=shop_filter if shop_filter in SHOP_LABELS else None,
+            q=q,
+            per_page=30,
+        )
+        trend_rows = get_trend(session)
+    finally:
+        session.close()
+
+    last_updated = max((r["snapshot_date"] for r in ok_results if r.get("snapshot_date")), default=None)
+
+    return render_template(
+        "dashboard.html",
         shops=results,
         bugs=bugs,
         bargains=bargains,
-        shop_nav=SHOPS,
+        total_deals=total_deals,
         refresh=refresh_status(),
+        trend_charts=build_counts_charts(trend_rows),
+        trend_days=len(trend_rows),
+        last_updated=last_updated,
+        shop_filter=shop_filter,
+        q=q,
+        bug_type=bug_type,
+    )
+
+
+@app.route("/deals")
+def deals():
+    shop_filter = request.args.get("shop", type=int)
+    if shop_filter not in SHOP_LABELS:
+        shop_filter = None
+    category = (request.args.get("category") or "").strip() or None
+    q = (request.args.get("q") or "").strip() or None
+    min_pct = request.args.get("min_pct", type=float)
+    sort = request.args.get("sort") or "pct"
+    page = max(1, request.args.get("page", default=1, type=int))
+    per_page = 50
+
+    session = SessionLocal()
+    try:
+        latest = get_latest_snapshots_for_all_shops(session, list(SHOP_LABELS))
+        categories = get_categories(session, [s.id for s in latest.values()])
+        rows, total = get_deals_page(
+            session,
+            SHOP_LABELS,
+            shop_id=shop_filter,
+            category=category,
+            q=q,
+            min_pct=min_pct,
+            sort=sort,
+            page=page,
+            per_page=per_page,
+        )
+    finally:
+        session.close()
+
+    pages = max(1, math.ceil(total / per_page))
+    return render_template(
+        "deals.html",
+        rows=rows,
+        total=total,
+        page=min(page, pages),
+        pages=pages,
+        categories=categories,
+        shop_filter=shop_filter,
+        category=category,
+        q=q,
+        min_pct=int(min_pct) if min_pct else None,
+        sort=sort,
+    )
+
+
+@app.route("/compare")
+def compare():
+    q = (request.args.get("q") or "").strip() or None
+    category = (request.args.get("category") or "").strip() or None
+    min_spread = request.args.get("min_spread", default=5, type=int)
+    page = max(1, request.args.get("page", default=1, type=int))
+    per_page = 25
+
+    session = SessionLocal()
+    try:
+        latest = get_latest_snapshots_for_all_shops(session, list(SHOP_LABELS))
+        categories = get_categories(session, [s.id for s in latest.values()])
+        groups = compare_across_shops(
+            session, SHOP_LABELS, min_spread_pct=min_spread, q=q, category=category
+        )
+    finally:
+        session.close()
+
+    total = len(groups)
+    pages = max(1, math.ceil(total / per_page))
+    page = min(page, pages)
+    visible = groups[(page - 1) * per_page : page * per_page]
+
+    return render_template(
+        "compare.html",
+        groups=visible,
+        total=total,
+        page=page,
+        pages=pages,
+        categories=categories,
+        q=q,
+        category=category,
+        min_spread=min_spread,
+    )
+
+
+@app.route("/history")
+def history_jump():
+    shop_id = request.args.get("shop", type=int)
+    if shop_id not in SHOP_LABELS:
+        return redirect(url_for("dashboard"))
+    return redirect(url_for("history", shop_id=shop_id))
+
+
+@app.route("/history/<int:shop_id>")
+def history(shop_id):
+    if shop_id not in SHOP_LABELS:
+        abort(404)
+    session = SessionLocal()
+    try:
+        rows = get_history(session, shop_id)
+    finally:
+        session.close()
+
+    charts = build_counts_charts(
+        [
+            {
+                "date": s.snapshot_date,
+                "zero": s.zero_price_bug_count or 0,
+                "placeholder": s.placeholder_bug_count or 0,
+                "deals": s.verified_deal_count or 0,
+            }
+            for s in rows
+        ]
+    )
+    return render_template(
+        "history.html", label=SHOP_LABELS[shop_id], rows=list(reversed(rows)), charts=charts
     )
 
 
@@ -688,6 +534,8 @@ CSV_HEADER = [
 @app.route("/download/sales.csv")
 def download_sales_csv():
     shop_id = request.args.get("shop_id", type=int)
+    q = (request.args.get("q") or "").strip() or None
+    category = (request.args.get("category") or "").strip() or None
     # Read anything request-scoped BEFORE the generator runs: Flask tears
     # the request context down once it starts streaming, so touching
     # `request` inside generate() raises and truncates the download.
@@ -711,7 +559,7 @@ def download_sales_csv():
 
         session = SessionLocal()
         try:
-            for r in iter_all_sales(session, SHOP_LABELS, shop_id=shop_id):
+            for r in iter_all_sales(session, SHOP_LABELS, shop_id=shop_id, q=q, category=category):
                 writer.writerow(
                     [
                         r["shop_label"],
@@ -724,9 +572,7 @@ def download_sales_csv():
                         f'{r["pct_vs_l30d"]:.1f}' if r["pct_vs_l30d"] is not None else "",
                         "yes" if r["is_verified_deal"] else "no",
                         r["snapshot_date"],
-                        f"{base_url}/item/{r['shop_id']}/{r['code']}"
-                        if r.get("code")
-                        else "",
+                        f"{base_url}/item/{r['shop_id']}/{r['code']}" if r.get("code") else "",
                     ]
                 )
                 yield flush()
@@ -738,124 +584,6 @@ def download_sales_csv():
         mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=masoutis_sale_cases.csv"},
     )
-
-
-@app.route("/history/<int:shop_id>")
-def history(shop_id):
-    if shop_id not in SHOP_LABELS:
-        abort(404)
-    session = SessionLocal()
-    try:
-        rows = get_history(session, shop_id)
-    finally:
-        session.close()
-    return render_template_string(
-        HISTORY_TEMPLATE, label=SHOP_LABELS[shop_id], rows=rows, shop_nav=SHOPS
-    )
-
-
-@app.route("/compare")
-def compare():
-    session = SessionLocal()
-    try:
-        groups = compare_across_shops(session, SHOP_LABELS)
-    finally:
-        session.close()
-    return render_template_string(COMPARE_TEMPLATE, groups=groups, shop_nav=SHOPS)
-
-
-# NOTE: ingestion and the bug-report email deliberately do NOT live here
-# as HTTP endpoints any more. Both need to hold whole shop catalogs in
-# memory, which repeatedly OOM-killed this 512MB service. They now run as
-# plain scripts on GitHub Actions runners (see .github/workflows/), which
-# have gigabytes of RAM and connect straight to the database. This web
-# service stays read-only and small.
-
-
-VERIFY_TEMPLATE = (
-    """
-<!doctype html>
-<html lang="el">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Verify: {{ stored.name if stored else code }}</title>
-"""
-    + BASE_STYLE
-    + """
-</head>
-<body>
-<header>
-  <h1>{{ stored.name if stored else "Product" }}</h1>
-  <p>{{ shop_label }}{% if stored %} &middot; {{ stored.category }}{% endif %}</p>
-</header>
-"""
-    + NAV
-    + """
-<main>
-  <div class="panel">
-    <h2>Live check against e-food, just now</h2>
-    {% if live_error %}
-      <div class="error">Couldn't reach e-food to verify: {{ live_error }}</div>
-    {% else %}
-      <p class="meta">
-        Re-queried e-food's own product endpoint at page load. This is their
-        answer right now, not our stored copy.
-      </p>
-      <table>
-        <tr>
-          <th></th>
-          <th>Our snapshot{% if stored %} ({{ snapshot_date }}){% endif %}</th>
-          <th>e-food, live</th>
-        </tr>
-        <tr>
-          <td>Price</td>
-          <td>{{ "%.2f"|format(stored.price) ~ "€" if stored else "&mdash;"|safe }}</td>
-          <td class="price-now">{{ live.calculated_price or ("%.2f"|format(live.price) ~ "€") }}</td>
-        </tr>
-        <tr>
-          <td>Full (pre-discount) price</td>
-          <td>{{ "%.2f"|format(stored.full_price) ~ "€" if stored and stored.full_price else "&mdash;"|safe }}</td>
-          <td>{{ "%.2f"|format(live.full_price) ~ "€" if live.full_price is not none else "&mdash;"|safe }}</td>
-        </tr>
-        <tr>
-          <td>30-day-low reference</td>
-          <td>{{ "%.2f"|format(stored.l30d_price) ~ "€" if stored and stored.l30d_price is not none else "&mdash;"|safe }}</td>
-          <td>{{ ("%.2f"|format(live_l30d) ~ "€") if live_l30d is not none else "&mdash;"|safe }}</td>
-        </tr>
-        <tr>
-          <td>Available</td>
-          <td>&mdash;</td>
-          <td>{{ "yes" if live.is_available else "no" }}</td>
-        </tr>
-      </table>
-
-      <div class="section">
-        {% if verdict_ok %}
-          <h3><span class="badge good">Confirmed</span> {{ verdict }}</h3>
-        {% else %}
-          <h3><span class="badge warn">Changed</span> {{ verdict }}</h3>
-        {% endif %}
-      </div>
-    {% endif %}
-
-    <div class="section">
-      <a class="btn" href="{{ shop_url }}" target="_blank" rel="noopener">Open this shop on e-food.gr &rarr;</a>
-      <p class="meta" style="margin-top:10px">
-        e-food has no per-product page, so the link opens the shop &mdash; search
-        the product name there. The raw API response for this exact item is at
-        <a href="{{ api_url }}" target="_blank" rel="noopener">this endpoint</a>.
-      </p>
-    </div>
-  </div>
-</main>
-<footer>
-  Source: <a href="https://github.com/am015-dev/food-defects-">food-defects-</a>
-</footer>
-</body>
-</html>
-"""
-)
 
 
 def _live_l30d(live):
@@ -887,8 +615,32 @@ def verify_item(shop_id, code):
                 .filter(ItemPrice.snapshot_id == snapshot.id, ItemPrice.code == code)
                 .first()
             )
+        history_rows = get_item_history_by_code(session, shop_id, code)
     finally:
         session.close()
+
+    price_chart = ""
+    if len(history_rows) >= 2:
+        price_chart = line_chart(
+            [
+                {
+                    "label": "Τιμή",
+                    "color": "var(--chart-blue)",
+                    "dash": "",
+                    "points": [(format_gr_date(d), p) for d, p, _ in history_rows],
+                },
+                {
+                    "label": "Αρχική",
+                    "color": "var(--chart-orange)",
+                    "dash": "6 3",
+                    "points": [(format_gr_date(d), fp) for d, _, fp in history_rows],
+                },
+            ],
+            height=150,
+            y_zero=False,
+            value_suffix="€",
+            area=True,
+        )
 
     live, live_error, live_l30d = None, None, None
     verdict, verdict_ok = "", False
@@ -897,31 +649,31 @@ def verify_item(shop_id, code):
         live_l30d = _live_l30d(live)
         price = live.get("price")
         if price is not None and price <= 0:
-            verdict = "e-food is still returning a price of 0,00€ for this product."
+            verdict = "Το e-food εξακολουθεί να επιστρέφει τιμή 0,00 € για αυτό το προϊόν."
             verdict_ok = True
         elif live_l30d is not None and live_l30d <= 0.05 and price:
             verdict = (
-                f"e-food still reports a 30-day-low of {live_l30d:.2f}€ for this "
-                f"product, while charging {price:.2f}€."
+                f"Το e-food εξακολουθεί να δηλώνει κατώτατη 30 ημερών {live_l30d:.2f} € "
+                f"ενώ χρεώνει {price:.2f} €."
             )
             verdict_ok = True
         elif stored is not None and stored.price is not None and price is not None:
             if abs(stored.price - price) < 0.005:
-                verdict = "Live price matches what we recorded."
+                verdict = "Η ζωντανή τιμή συμφωνεί με το στιγμιότυπό μας."
                 verdict_ok = True
             else:
                 verdict = (
-                    f"Price has moved since our snapshot: {stored.price:.2f}€ "
-                    f"then, {price:.2f}€ now."
+                    f"Η τιμή άλλαξε από το στιγμιότυπο: {stored.price:.2f} € τότε, "
+                    f"{price:.2f} € τώρα."
                 )
         else:
-            verdict = "Fetched live values above."
+            verdict = "Οι ζωντανές τιμές φαίνονται παραπάνω."
             verdict_ok = True
     except Exception as exc:  # noqa: BLE001
         live_error = str(exc)
 
-    return render_template_string(
-        VERIFY_TEMPLATE,
+    return render_template(
+        "verify.html",
         code=code,
         stored=stored,
         snapshot_date=snapshot_date,
@@ -933,7 +685,8 @@ def verify_item(shop_id, code):
         live_error=live_error,
         verdict=verdict,
         verdict_ok=verdict_ok,
-        shop_nav=SHOPS,
+        price_chart=price_chart,
+        history_points=len(history_rows),
     )
 
 

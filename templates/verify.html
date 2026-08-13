@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}{{ stored.name if stored else "Προϊόν" }} — Επαλήθευση{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>{{ stored.name if stored else "Προϊόν" }}</h1>
+  <p class="sub">{{ shop_label }}{% if stored %} · {{ stored.category }}{% endif %}</p>
+</div>
+
+<section class="panel">
+  <h2>Ζωντανός έλεγχος στο e-food, μόλις τώρα</h2>
+  {% if live_error %}
+  <div class="error">Δεν ήταν δυνατή η επαλήθευση από το e-food: {{ live_error }}</div>
+  {% else %}
+  <p class="meta">Νέο ερώτημα στο endpoint προϊόντος του e-food κατά τη φόρτωση της σελίδας — αυτή είναι η απάντησή τους τώρα, όχι το αποθηκευμένο αντίγραφό μας.</p>
+  <div class="table-scroll">
+    <table class="kv-compare">
+      <thead>
+        <tr><th></th><th>Στιγμιότυπό μας{% if stored %} ({{ snapshot_date|grdate }}){% endif %}</th><th>e-food, ζωντανά</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Τιμή</td>
+          <td class="num">{{ stored.price|eur if stored else "—" }}</td>
+          <td class="price-now">{{ live.calculated_price or (live.price|eur) }}</td>
+        </tr>
+        <tr>
+          <td>Αρχική τιμή (προ έκπτωσης)</td>
+          <td class="num">{{ stored.full_price|eur if stored and stored.full_price else "—" }}</td>
+          <td class="num">{{ live.full_price|eur if live.full_price is not none else "—" }}</td>
+        </tr>
+        <tr>
+          <td>Κατώτατη 30 ημερών</td>
+          <td class="num">{{ stored.l30d_price|eur if stored and stored.l30d_price is not none else "—" }}</td>
+          <td class="num">{{ live_l30d|eur if live_l30d is not none else "—" }}</td>
+        </tr>
+        <tr>
+          <td>Διαθέσιμο</td>
+          <td>—</td>
+          <td>{{ "ναι" if live.is_available else "όχι" }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    {% if verdict_ok %}
+    <h3><span class="badge good">Επιβεβαιώθηκε</span> {{ verdict }}</h3>
+    {% else %}
+    <h3><span class="badge warn">Άλλαξε</span> {{ verdict }}</h3>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if price_chart %}
+  <div class="section">
+    <h3>Ιστορικό τιμής</h3>
+    <div class="chart-block">{{ price_chart|safe }}</div>
+  </div>
+  {% elif history_points == 1 %}
+  <p class="chart-note">Το γράφημα τιμής θα εμφανιστεί όταν συγκεντρωθούν δεδομένα από 2+ ημέρες.</p>
+  {% endif %}
+
+  <div class="section">
+    <a class="btn" href="{{ shop_url }}" target="_blank" rel="noopener">Άνοιγμα καταστήματος στο e-food.gr →</a>
+    <p class="meta" style="margin-top:10px">
+      Το e-food δεν έχει σελίδα ανά προϊόν, οπότε ο σύνδεσμος ανοίγει το κατάστημα — αναζητήστε εκεί το όνομα του προϊόντος.
+      Η ωμή απάντηση του API για αυτό ακριβώς το προϊόν: <a href="{{ api_url }}" target="_blank" rel="noopener">endpoint</a>.
+    </p>
+  </div>
+</section>
+
+{% endblock %}

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Σύγκριση καταστημάτων — Παρατηρητήριο Τιμών{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Ίδιο προϊόν, άλλη τιμή</h1>
+  <p class="sub">Προϊόντα που πωλούνται σε 2+ καταστήματα με διαφορά τιμής, από τα τελευταία στιγμιότυπα.</p>
+</div>
+
+<form class="filters" method="get" action="/compare">
+  <label class="grow wide">Αναζήτηση προϊόντος
+    <input type="search" name="q" value="{{ q or '' }}" placeholder="π.χ. Ζαγόρι, Pepsi…">
+  </label>
+  <label>Κατηγορία
+    <select name="category">
+      <option value="">Όλες</option>
+      {% for c in categories %}
+      <option value="{{ c }}" {% if category == c %}selected{% endif %}>{{ c }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Ελάχιστη διαφορά
+    <select name="min_spread">
+      {% for p in (5, 10, 20, 50) %}
+      <option value="{{ p }}" {% if min_spread == p %}selected{% endif %}>{{ p }}%+</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit" class="js-hide">Εφαρμογή</button>
+</form>
+
+<section class="panel">
+  <p class="meta">{{ total }} προϊόντα{% if total %} · σελίδα {{ page }} από {{ pages }}{% endif %}</p>
+  {% if groups %}
+  {% for g in groups %}
+  <div class="section">
+    <h3>{{ g.name }} <span class="item-cat">· {{ g.category }}</span>
+      <span class="pct">+{{ "%.0f"|format(g.spread_pct) }}% διαφορά</span>
+    </h3>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Κατάστημα</th><th>Τιμή</th></tr></thead>
+        <tbody>
+          {% for row in g.rows %}
+          <tr>
+            <td>{{ row.shop_label }}</td>
+            <td class="{{ 'price-now' if row.price == g.low else 'num' }}">{{ row.price|eur }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endfor %}
+  <nav class="pagination" aria-label="Σελιδοποίηση">
+    {% if page > 1 %}<a href="{{ page_url(page - 1) }}">← Προηγούμενη</a>{% else %}<span class="disabled">← Προηγούμενη</span>{% endif %}
+    <span class="page-info">Σελίδα {{ page }} από {{ pages }}</span>
+    {% if page < pages %}<a href="{{ page_url(page + 1) }}">Επόμενη →</a>{% else %}<span class="disabled">Επόμενη →</span>{% endif %}
+  </nav>
+  {% else %}
+  <div class="empty">Δεν υπάρχουν αρκετά δεδομένα για σύγκριση με αυτά τα φίλτρα.</div>
+  {% endif %}
+</section>
+
+{% endblock %}

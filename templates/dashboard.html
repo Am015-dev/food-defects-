@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}Πίνακας — Παρατηρητήριο Τιμών{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Σφάλματα τιμών &amp; πραγματικές προσφορές</h1>
+  <p class="sub">{{ shops|length }} καταστήματα γύρω από το Χαλάνδρι · ημερήσια στιγμιότυπα μέσω e-food
+  {% if last_updated %} · τελευταία ενημέρωση {{ last_updated|grdate }}{% endif %}</p>
+</div>
+
+{% if refresh.running %}
+<section class="panel banner">
+  <h2>⏳ Λήψη νέων δεδομένων…</h2>
+  <p class="meta">Ολοκληρώθηκαν {{ refresh.done }} από {{ refresh.total }} καταστήματα.
+  Τα καταστήματα κατεβαίνουν ένα-ένα για λόγους μνήμης· η σελίδα ανανεώνεται μόνη της.</p>
+</section>
+<meta http-equiv="refresh" content="15">
+{% endif %}
+
+{% if trend_charts %}
+<section class="panel">
+  <h2>Τάση {{ trend_days }} ημερών</h2>
+  <p class="meta">Σύνολα ανά ημέρα σε όλα τα καταστήματα.</p>
+  <div class="chart-grid">
+    <div>
+      <h3 class="chart-title">Σφάλματα</h3>
+      <div class="chart-block">{{ trend_charts.bugs|safe }}</div>
+    </div>
+    <div>
+      <h3 class="chart-title">Επαληθευμένες προσφορές</h3>
+      <div class="chart-block">{{ trend_charts.deals|safe }}</div>
+    </div>
+  </div>
+</section>
+{% endif %}
+
+<form class="filters" method="get" action="/">
+  <label class="grow wide">Αναζήτηση προϊόντος
+    <input type="search" name="q" value="{{ q or '' }}" placeholder="π.χ. Pepsi, γάλα, αντηλιακό…" data-quickfilter="#bugs-list">
+  </label>
+  <label>Κατάστημα
+    <select name="shop">
+      <option value="">Όλα</option>
+      {% for s in shop_nav %}
+      <option value="{{ s.id }}" {% if shop_filter == s.id %}selected{% endif %}>{{ s.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Τύπος ευρήματος
+    <select name="type">
+      <option value="">Όλα</option>
+      <option value="zero" {% if bug_type == 'zero' %}selected{% endif %}>Μηδενική τιμή</option>
+      <option value="placeholder" {% if bug_type == 'placeholder' %}selected{% endif %}>Πλασματική «κατώτατη 30 ημερών»</option>
+      <option value="deal" {% if bug_type == 'deal' %}selected{% endif %}>Επαληθευμένες προσφορές</option>
+    </select>
+  </label>
+  <button type="submit" class="js-hide">Εφαρμογή</button>
+</form>
+
+<section class="panel" id="bugs-summary">
+  <h2>🐛 Σφάλματα αυτή τη στιγμή</h2>
+  <p class="meta">Στα τελευταία αποθηκευμένα στιγμιότυπα{% if q or shop_filter or bug_type %} — με τα φίλτρα που επιλέξατε{% endif %}.</p>
+
+  <div class="section">
+    <h3><span class="badge bad">Σφάλμα</span> Προϊόντα με τιμή 0,00 € ({{ bugs.zero_price|length }})</h3>
+    {% if bugs.zero_price %}
+    <ul class="items" id="bugs-list">
+      {% for it in bugs.zero_price %}
+      <li>
+        {% if it.code %}<a href="/item/{{ it.shop_id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
+        <span class="item-cat">· {{ it.shop_label }} · {{ it.category }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="empty">Δεν βρέθηκαν.</div>
+    {% endif %}
+  </div>
+
+  <div class="section">
+    <h3><span class="badge warn">Σφάλμα</span> Πλασματική «κατώτατη τιμή 30 ημερών» 0,01 € ({{ bugs.placeholder|length }})</h3>
+    {% if bugs.placeholder %}
+    <ul class="items">
+      {% for it in bugs.placeholder[:20] %}
+      <li>
+        {% if it.code %}<a href="/item/{{ it.shop_id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
+        <span class="item-cat">· {{ it.shop_label }} · {{ it.category }} · τώρα {{ it.price|eur }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% if bugs.placeholder|length > 20 %}
+    <div class="empty">… και {{ bugs.placeholder|length - 20 }} ακόμη</div>
+    {% endif %}
+    {% else %}
+    <div class="empty">Δεν βρέθηκαν.</div>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel" id="bargains">
+  <h2>💰 Πραγματικά καλές προσφορές</h2>
+  <p class="meta">Επαληθευμένες 20%+ κάτω από την πραγματική κατώτατη 30 ημερών (όχι απλώς την «αρχική» τιμή).</p>
+  {% if bargains %}
+  <div class="table-scroll">
+    <table class="cards-mobile">
+      <thead>
+        <tr><th>Προϊόν</th><th>Κατάστημα</th><th data-sort>Τιμή</th><th>Αρχική</th><th data-sort>Έκπτωση</th></tr>
+      </thead>
+      <tbody>
+        {% for d in bargains %}
+        <tr>
+          <td class="td-main">{% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
+          <td data-label="Κατάστημα"><span class="item-cat">{{ d.shop_label }}</span></td>
+          <td data-label="Τιμή" class="price-now">{{ d.price|eur }}</td>
+          <td data-label="Αρχική" class="price-was">{{ d.full_price|eur }}</td>
+          <td data-label="Έκπτωση" class="pct">-{{ "%.0f"|format(d.pct) }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="section"><a class="btn secondary" href="/deals">Όλες οι προσφορές ({{ total_deals }}) →</a></div>
+  {% else %}
+  <div class="empty">Δεν βρέθηκαν ακόμη.</div>
+  {% endif %}
+</section>
+
+<section class="panel" id="export">
+  <h2>📥 Εξαγωγή</h2>
+  <p class="meta">Όλα τα προϊόντα με οποιαδήποτε ένδειξη έκπτωσης, σε όλα τα καταστήματα — με το επίσημο ποσοστό και το ποσοστό έναντι της πραγματικής κατώτατης 30 ημερών.</p>
+  <a class="btn" href="/download/sales.csv">Λήψη CSV με όλες τις εκπτώσεις</a>
+</section>
+
+{% for r in shops %}
+<section class="panel" id="shop-{{ r.id }}">
+  {% if r.no_data %}
+  <h2>{{ r.label }} <span class="source-tag">χωρίς δεδομένα</span></h2>
+  <div class="empty">Δεν υπάρχει ακόμη στιγμιότυπο. Θα ληφθεί αυτόματα στην επόμενη ανανέωση.</div>
+  {% elif r.ok %}
+  <h2>{{ r.title }} <span class="item-cat">— {{ r.label }}</span> <span class="source-tag">{{ r.snapshot_date|grdate }}</span></h2>
+  <p class="meta">{{ r.address }} · {{ "Ανοιχτό τώρα" if r.is_open else "Κλειστό" }}</p>
+  <div class="stats">
+    <span><b>{{ r.total_items }}</b> προϊόντα</span>
+    <span><b>{{ r.zero_price_bugs|length }}</b> μηδενικές τιμές</span>
+    <span><b>{{ r.placeholder_bugs|length }}</b> πλασματικές κατώτατες</span>
+    <span><b>{{ r.verified_deals|length }}</b> επαληθευμένες προσφορές</span>
+    <span><a href="/history/{{ r.id }}">Ιστορικό →</a></span>
+  </div>
+  {% if r.verified_deals %}
+  <div class="table-scroll">
+    <table class="cards-mobile">
+      <thead><tr><th>Κορυφαίες προσφορές</th><th data-sort>Τιμή</th><th>Αρχική</th><th data-sort>Έκπτωση</th></tr></thead>
+      <tbody>
+        {% for d in r.verified_deals[:5] %}
+        <tr>
+          <td class="td-main">{% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
+          <td data-label="Τιμή" class="price-now">{{ d.price|eur }}</td>
+          <td data-label="Αρχική" class="price-was">{{ d.full_price|eur }}</td>
+          <td data-label="Έκπτωση" class="pct">-{{ "%.0f"|format(d.pct) }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  {% else %}
+  <h2>{{ r.label }}</h2>
+  <div class="error">Αποτυχία ανάγνωσης: {{ r.error }}</div>
+  {% endif %}
+</section>
+{% endfor %}
+
+{% endblock %}
