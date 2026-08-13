@@ -18,16 +18,20 @@ def get_latest_snapshot(session, shop_id):
     )
 
 
-def get_product_across_shops(session, product_name, exclude_shop_id=None):
+def get_product_across_shops(session, product_name, shop_labels, exclude_shop_id=None):
     """Find the same product (by name) across all shops' latest snapshots.
 
     Returns list of dicts: {shop_id, shop_label, name, price, full_price,
     l30d_price, size_info, category} ordered by price ascending.
-    """
-    from shops import SHOP_LABELS
 
+    Args:
+        session: SQLAlchemy session
+        product_name: Exact product name to search for
+        shop_labels: Dict mapping shop_id to shop_label
+        exclude_shop_id: Shop to exclude from results (e.g., the current shop)
+    """
     latest_snapshots = {}
-    for shop_id in SHOP_LABELS.keys():
+    for shop_id in shop_labels.keys():
         snap = get_latest_snapshot(session, shop_id)
         if snap:
             latest_snapshots[shop_id] = snap
@@ -50,7 +54,7 @@ def get_product_across_shops(session, product_name, exclude_shop_id=None):
         if item and item.price is not None and item.price > 0:
             results.append({
                 "shop_id": shop_id,
-                "shop_label": SHOP_LABELS.get(shop_id, "Unknown"),
+                "shop_label": shop_labels.get(shop_id, "Unknown"),
                 "name": item.name,
                 "price": item.price,
                 "full_price": item.full_price,
