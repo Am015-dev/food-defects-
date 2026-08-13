@@ -288,6 +288,37 @@ def test_compare_guard_bypassed_by_category(client, seeded, monkeypatch):
     assert COMMON_PRODUCT in body
 
 
+def test_compare_guard_exact_threshold_boundary(client, seeded, monkeypatch):
+    # Regression guard: the comparator is `catalog_size > threshold`, so
+    # a catalog exactly AT the threshold must NOT trigger the guard, and
+    # one row past it MUST -- an easy > vs >= flip to get wrong later.
+    # Computed dynamically from the actual seeded data rather than a
+    # guessed row count, so this stays correct if the fixture changes.
+    from db import ItemPrice
+    from queries import get_latest_snapshots_for_all_shops
+
+    shop_labels = {s["id"]: s["label"] for s in SHOPS}
+    session = SessionLocal()
+    try:
+        latest = get_latest_snapshots_for_all_shops(session, list(shop_labels))
+        catalog_size = (
+            session.query(ItemPrice.id)
+            .filter(ItemPrice.snapshot_id.in_([s.id for s in latest.values()]), ItemPrice.price > 0)
+            .count()
+        )
+    finally:
+        session.close()
+    assert catalog_size > 0  # sanity: the fixture must have actually seeded priced rows
+
+    monkeypatch.setattr("webapp.COMPARE_SCAN_GUARD_ROWS", catalog_size)
+    resp = client.get("/compare")
+    assert "πολύ μεγάλος για σύγκριση" not in resp.get_data(as_text=True)
+
+    monkeypatch.setattr("webapp.COMPARE_SCAN_GUARD_ROWS", catalog_size - 1)
+    resp = client.get("/compare")
+    assert "πολύ μεγάλος για σύγκριση" in resp.get_data(as_text=True)
+
+
 @pytest.mark.parametrize(
     "params",
     [
@@ -429,9 +460,35 @@ def test_download_csv(client, seeded):
     assert resp.mimetype == "text/csv"
 
 
-def test_download_csv_filtered_by_shop(client, seeded):
+def test_download_csv_filtered_by_shop(client):
+    # Regression: this used to only assert status_code == 200, which
+    # would keep passing even if shop_id were silently ignored and every
+    # shop's rows came back mixed together.
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            TODAY,
+            _catalog([_item(1, "Discount In Shop A", 3.0, full_price=6.0)]),
+        )
+        store_snapshot(
+            session,
+            SHOP_B,
+            SHOP_B_LABEL,
+            TODAY,
+            _catalog([_item(2, "Discount In Shop B", 4.0, full_price=8.0)]),
+        )
+        session.commit()
+    finally:
+        session.close()
+
     resp = client.get("/download/sales.csv", query_string={"shop_id": str(SHOP_A)})
     assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "Discount In Shop A" in body
+    assert "Discount In Shop B" not in body
 
 
 def test_item_page_unknown_shop_404s(client):
