@@ -5,11 +5,13 @@ storefronts on e-food.gr, backed by daily snapshots in the database
 
 import csv
 import io
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 
-from flask import Flask, Response, abort, render_template_string, request
+from flask import Flask, Response, abort, jsonify, render_template_string, request
 
-from db import SessionLocal, init_db
+from db import SessionLocal, Snapshot, init_db
 from queries import (
     compare_across_shops,
     get_flagged_items,
@@ -29,6 +31,107 @@ except Exception as exc:  # noqa: BLE001
     print(f"WARNING: init_db() failed at startup, continuing anyway: {exc}")
 
 SHOP_LABELS = {s["id"]: s["label"] for s in SHOPS}
+
+
+# --- Self-population -------------------------------------------------
+#
+# The dashboard keeps itself current without any external scheduler.
+# Render's free tier has no cron service, so when a page load notices
+# today's snapshots are missing it kicks off a background refresh.
+#
+# The refresh walks the shops STRICTLY ONE AT A TIME. That constraint is
+# the whole point: fetching all 12 catalogs at once peaked at ~460MB and
+# repeatedly got this 512MB instance OOM-killed, whereas sequential
+# fetching measures around 160MB. Each shop is committed as it finishes,
+# so if the worker is recycled or the instance sleeps mid-refresh, the
+# work already done persists and the next page load resumes the rest.
+
+_refresh_lock = threading.Lock()
+_refresh_state = {"running": False, "done": 0, "total": len(SHOPS), "error": None}
+_last_refresh_attempt = None
+
+# Don't re-attempt more often than this. Without it, a shop that keeps
+# failing would be re-fetched on every page load (and the page
+# auto-reloads while a refresh is in flight), which would mean hammering
+# e-food's API. This is meant to be a low-frequency, personal-use tool.
+REFRESH_COOLDOWN_SECONDS = 600
+
+
+def refresh_status():
+    with _refresh_lock:
+        return dict(_refresh_state)
+
+
+def _shops_needing_refresh():
+    """Shops with no snapshot for today (UTC)."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    session = SessionLocal()
+    try:
+        fresh_ids = {
+            row[0]
+            for row in session.query(Snapshot.shop_id).filter(
+                Snapshot.snapshot_date == today
+            )
+        }
+    finally:
+        session.close()
+    return [s for s in SHOPS if s["id"] not in fresh_ids]
+
+
+def _run_refresh(pending):
+    from ingest import fetch_and_store_shop  # lazy: keeps request path light
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    for shop in pending:
+        try:
+            result = fetch_and_store_shop(shop["id"], shop["label"], today)
+            if not result.get("ok"):
+                print(f"refresh: {shop['label']} failed: {result.get('error')}")
+        except Exception as exc:  # noqa: BLE001 - one shop must not stop the rest
+            print(f"refresh: {shop['label']} raised: {exc}")
+            with _refresh_lock:
+                _refresh_state["error"] = str(exc)
+        with _refresh_lock:
+            _refresh_state["done"] += 1
+    with _refresh_lock:
+        _refresh_state["running"] = False
+    print("refresh: finished")
+
+
+def maybe_start_refresh():
+    """Start a background refresh if today's data is incomplete, one
+    isn't already in flight, and we're outside the cooldown. Returns True
+    if a refresh is running."""
+    global _last_refresh_attempt
+
+    now = datetime.now(timezone.utc)
+    with _refresh_lock:
+        if _refresh_state["running"]:
+            return True
+        if (
+            _last_refresh_attempt is not None
+            and (now - _last_refresh_attempt).total_seconds() < REFRESH_COOLDOWN_SECONDS
+        ):
+            return False
+
+    try:
+        pending = _shops_needing_refresh()
+    except Exception as exc:  # noqa: BLE001 - never let this break a page render
+        print(f"refresh: could not determine staleness: {exc}")
+        return False
+
+    if not pending:
+        return False
+
+    with _refresh_lock:
+        if _refresh_state["running"]:
+            return True
+        _last_refresh_attempt = now
+        _refresh_state.update(running=True, done=0, total=len(pending), error=None)
+
+    threading.Thread(target=_run_refresh, args=(pending,), daemon=True).start()
+    print(f"refresh: started for {len(pending)} shop(s)")
+    return True
 
 
 def view_from_snapshot(session, shop_id, label, snapshot):
@@ -229,6 +332,18 @@ DASHBOARD_TEMPLATE = (
     + NAV
     + """
 <main>
+  {% if refresh.running %}
+  <section class="panel" style="border-color: var(--warn);">
+    <h2>⏳ Fetching fresh data&hellip;</h2>
+    <p class="meta">
+      {{ refresh.done }} of {{ refresh.total }} shops done. Shops are fetched one at a
+      time to stay inside this instance's memory limit, so a full refresh takes a
+      minute or two. This page reloads itself until it's finished.
+    </p>
+  </section>
+  <meta http-equiv="refresh" content="15">
+  {% endif %}
+
   <section class="panel" id="bugs-summary">
     <h2>\U0001F41B Bugs found right now</h2>
     <p class="meta">Across all {{ shops|length }} shops' latest saved snapshot.</p>
@@ -480,6 +595,9 @@ COMPARE_TEMPLATE = (
 
 @app.route("/")
 def dashboard():
+    # Top up today's data in the background if it's missing or partial.
+    maybe_start_refresh()
+
     # Each shop's items are already fetched once here; derive the
     # cross-shop bugs/bargains summaries from that instead of re-querying
     # the database per shop again (that redundancy was the dashboard's
@@ -502,8 +620,22 @@ def dashboard():
     )[:30]
 
     return render_template_string(
-        DASHBOARD_TEMPLATE, shops=results, bugs=bugs, bargains=bargains, shop_nav=SHOPS
+        DASHBOARD_TEMPLATE,
+        shops=results,
+        bugs=bugs,
+        bargains=bargains,
+        shop_nav=SHOPS,
+        refresh=refresh_status(),
     )
+
+
+@app.route("/refresh", methods=["POST", "GET"])
+def refresh():
+    """Kick off (or report on) the background data refresh."""
+    running = maybe_start_refresh()
+    status = refresh_status()
+    status["running"] = running or status["running"]
+    return jsonify(status)
 
 
 CSV_HEADER = [
