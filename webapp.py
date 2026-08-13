@@ -21,7 +21,7 @@ from flask import (
     request,
     url_for,
 )
-from sqlalchemy import func, text
+from sqlalchemy import text
 
 from charts import line_chart
 from db import ItemPrice, SessionLocal, Snapshot, init_db
@@ -363,23 +363,20 @@ def dashboard():
 
     session = SessionLocal()
     try:
+        # Computed once and threaded through get_deals_page and
+        # get_price_drops below, instead of each independently re-running
+        # the same "latest snapshot per shop" queries.
+        latest = get_latest_snapshots_for_all_shops(session, list(SHOP_LABELS))
         bargains, total_deals = get_deals_page(
             session,
             SHOP_LABELS,
             shop_id=shop_filter if shop_filter in SHOP_LABELS else None,
             q=q,
             per_page=30,
+            latest=latest,
         )
         trend_rows = get_trend(session)
-        # Per-shop, not a global MAX(fetched_at) -- one shop refreshing
-        # recently must not hide the other 12 having gone stale.
-        per_shop_newest = dict(
-            session.query(Snapshot.shop_id, func.max(Snapshot.fetched_at))
-            .filter(Snapshot.shop_id.in_(list(SHOP_LABELS)))
-            .group_by(Snapshot.shop_id)
-            .all()
-        )
-        price_drops, _ = get_price_drops(session, SHOP_LABELS, page=1, per_page=5)
+        price_drops, _ = get_price_drops(session, SHOP_LABELS, page=1, per_page=5, latest=latest)
     finally:
         session.close()
 
@@ -390,9 +387,12 @@ def dashboard():
     # banner is specifically about shops that DO have data going stale,
     # so it's driven by the oldest of each (present) shop's own newest
     # snapshot, not a global MAX that one fresh shop could dominate.
+    # Every shop has at most one snapshot per day (uq_shop_snapshot_day),
+    # so the latest-by-date snapshot already computed above is also each
+    # shop's latest-by-fetched_at -- no separate query needed for this.
     is_stale = False
-    if per_shop_newest:
-        oldest_of_the_newest = min(per_shop_newest.values())
+    if latest:
+        oldest_of_the_newest = min(snap.fetched_at for snap in latest.values())
         # fetched_at is stored naive (see ingest.py) but always as a UTC
         # wall-clock value, so compare against a naive UTC "now" too.
         age_hours = (
@@ -444,6 +444,7 @@ def deals():
             sort=sort,
             page=page,
             per_page=per_page,
+            latest=latest,
         )
     finally:
         session.close()
@@ -501,7 +502,9 @@ def compare():
         groups = (
             []
             if scan_too_large
-            else compare_across_shops(session, SHOP_LABELS, min_spread_pct=min_spread, q=q, category=category)
+            else compare_across_shops(
+                session, SHOP_LABELS, min_spread_pct=min_spread, q=q, category=category, latest=latest
+            )
         )
     finally:
         session.close()
@@ -563,6 +566,7 @@ def search():
             sort=sort,
             page=page,
             per_page=per_page,
+            latest=latest,
         )
     finally:
         session.close()
@@ -606,7 +610,14 @@ def drops():
         latest = get_latest_snapshots_for_all_shops(session, list(SHOP_LABELS))
         categories = get_categories(session, [s.id for s in latest.values()])
         rows, total = get_price_drops(
-            session, SHOP_LABELS, shop_id=shop_filter, q=q, category=category, page=page, per_page=per_page
+            session,
+            SHOP_LABELS,
+            shop_id=shop_filter,
+            q=q,
+            category=category,
+            page=page,
+            per_page=per_page,
+            latest=latest,
         )
     finally:
         session.close()

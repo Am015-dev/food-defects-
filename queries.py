@@ -78,7 +78,19 @@ def _shop_price_drops_query(session, sid, newest, previous, q=None, category=Non
     return query
 
 
-def get_price_drops(session, shop_labels_by_id, shop_id=None, q=None, category=None, page=1, per_page=50):
+def _get_previous_snapshot(session, shop_id, before_date):
+    """The snapshot immediately before before_date for one shop, or None."""
+    return (
+        session.query(Snapshot)
+        .filter(Snapshot.shop_id == shop_id, Snapshot.snapshot_date < before_date)
+        .order_by(Snapshot.snapshot_date.desc())
+        .first()
+    )
+
+
+def get_price_drops(
+    session, shop_labels_by_id, shop_id=None, q=None, category=None, page=1, per_page=50, latest=None
+):
     """Items whose price fell between a shop's previous snapshot and its
     latest one. Each shop's self-join (see _shop_price_drops_query) is
     combined into one SQL UNION ALL so sorting, counting, and
@@ -86,13 +98,23 @@ def get_price_drops(session, shop_labels_by_id, shop_id=None, q=None, category=N
     every drop across every shop into Python first. Shops without two
     snapshots yet are skipped, not treated as an error.
 
+    `latest` lets a caller that already ran
+    get_latest_snapshots_for_all_shops pass that result straight through,
+    so each shop only needs one more query here (for the *previous*
+    snapshot) instead of two (get_recent_snapshot_pair re-fetching the
+    already-known newest one too).
+
     Returns (rows, total_count), same convention as get_deals_page /
     search_products.
     """
     ids = [shop_id] if shop_id is not None else list(shop_labels_by_id)
     per_shop_queries = []
     for sid in ids:
-        newest, previous = get_recent_snapshot_pair(session, sid)
+        if latest is not None:
+            newest = latest.get(sid)
+            previous = _get_previous_snapshot(session, sid, newest.snapshot_date) if newest else None
+        else:
+            newest, previous = get_recent_snapshot_pair(session, sid)
         if newest is None or previous is None:
             continue
         per_shop_queries.append(
@@ -253,12 +275,21 @@ def get_deals_page(
     sort="pct",
     page=1,
     per_page=50,
+    latest=None,
 ):
     """One page of verified deals across the latest snapshots, filtered
     and ordered in SQL. Returns (rows, total_count). Column-only and
-    LIMIT'd -- at most per_page rows are ever materialized."""
+    LIMIT'd -- at most per_page rows are ever materialized.
+
+    `latest` lets a caller that already ran
+    get_latest_snapshots_for_all_shops pass that result straight through
+    instead of this function querying it again from scratch.
+    """
     ids = [shop_id] if shop_id is not None else list(shop_labels_by_id)
-    latest = get_latest_snapshots_for_all_shops(session, ids)
+    if latest is None:
+        latest = get_latest_snapshots_for_all_shops(session, ids)
+    else:
+        latest = {sid: snap for sid, snap in latest.items() if sid in ids}
     if not latest:
         return [], 0
     shop_by_snapshot = {snap.id: (sid, snap.snapshot_date) for sid, snap in latest.items()}
@@ -389,6 +420,7 @@ def search_products(
     sort="price",
     page=1,
     per_page=50,
+    latest=None,
 ):
     """Search the full catalog -- not just flagged bug/deal rows -- across
     the latest snapshot of every tracked shop. q is required: unlike a
@@ -396,12 +428,20 @@ def search_products(
     open-ended scan of the whole catalog needs a real search term to
     bound it, so an empty q returns nothing rather than paging through
     the entire multi-shop inventory.
+
+    `latest` lets a caller that already ran
+    get_latest_snapshots_for_all_shops (e.g. to build a category list)
+    pass that result straight through instead of this function querying
+    it again from scratch.
     """
     if not q:
         return [], 0
 
     ids = [shop_id] if shop_id is not None else list(shop_labels_by_id)
-    latest = get_latest_snapshots_for_all_shops(session, ids)
+    if latest is None:
+        latest = get_latest_snapshots_for_all_shops(session, ids)
+    else:
+        latest = {sid: snap for sid, snap in latest.items() if sid in ids}
     if not latest:
         return [], 0
     shop_by_snapshot = {snap.id: (sid, snap.snapshot_date) for sid, snap in latest.items()}
@@ -467,12 +507,20 @@ def compare_across_shops(
     min_spread_pct=5.0,
     q=None,
     category=None,
+    latest=None,
 ):
     """For the latest snapshot of each shop, group items by exact product
     name and return those sold in >=min_shops shops, sorted by how much
     the price differs between the cheapest and priciest shop. q and
-    category narrow the scan in SQL before anything is grouped."""
-    latest = get_latest_snapshots_for_all_shops(session, list(shop_labels_by_id))
+    category narrow the scan in SQL before anything is grouped.
+
+    `latest` lets a caller that already ran
+    get_latest_snapshots_for_all_shops (e.g. to build a category list)
+    pass that result straight through instead of this function querying
+    it again from scratch.
+    """
+    if latest is None:
+        latest = get_latest_snapshots_for_all_shops(session, list(shop_labels_by_id))
     if len(latest) < min_shops:
         return []
 
