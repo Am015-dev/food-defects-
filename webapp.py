@@ -3,16 +3,26 @@ storefronts on e-food.gr, backed by daily snapshots in the database
 (see ingest.py / db.py), with historical and cross-shop comparison views.
 """
 
+import csv
 import hmac
+import io
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from flask import Flask, abort, jsonify, render_template_string, request
+from flask import Flask, Response, abort, jsonify, render_template_string, request
 
 from db import SessionLocal, init_db
 from efood_client import fetch_restaurant
 from price_analysis import analyze
-from queries import compare_across_shops, get_history, get_snapshot_items, get_latest_snapshot
+from queries import (
+    compare_across_shops,
+    get_all_bugs,
+    get_all_sales,
+    get_history,
+    get_latest_snapshot,
+    get_snapshot_items,
+    get_top_bargains,
+)
 from shops import SHOPS
 
 app = Flask(__name__)
@@ -153,7 +163,11 @@ BASE_STYLE = """
     background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
     padding: 20px 22px; margin: 18px 0;
   }
-  .shop h2 { margin: 0 0 2px; font-size: 18px; }
+  .shop h2, .panel h2 { margin: 0 0 2px; font-size: 18px; }
+  .panel > p.meta { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+  .btn { display: inline-block; background: var(--good-bg); color: var(--good); border: 1px solid var(--good);
+    padding: 8px 14px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 13.5px; }
+  .btn:hover { filter: brightness(1.15); }
   .shop .meta { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
   .stats { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 14px; font-size: 13px; color: var(--muted); }
   .stats b { color: var(--text); }
@@ -218,6 +232,68 @@ DASHBOARD_TEMPLATE = (
     + NAV
     + """
 <main>
+  <section class="panel" id="bugs-summary">
+    <h2>\U0001F41B Bugs found right now</h2>
+    <p class="meta">Across all {{ shops|length }} shops' latest saved snapshot.</p>
+
+    <div class="section">
+      <h3><span class="badge bad">Bug</span> Zero-priced listings ({{ bugs.zero_price|length }})</h3>
+      {% if bugs.zero_price %}
+      <ul class="items">
+        {% for it in bugs.zero_price %}
+        <li>{{ it.name }} <span class="item-cat">&middot; {{ it.shop_label }} &middot; {{ it.category }}</span></li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <div class="empty">None found.</div>
+      {% endif %}
+    </div>
+
+    <div class="section">
+      <h3><span class="badge warn">Bug</span> Placeholder 30-day-low reference price (&euro;0.01) ({{ bugs.placeholder|length }})</h3>
+      {% if bugs.placeholder %}
+      <ul class="items">
+        {% for it in bugs.placeholder[:20] %}
+        <li>{{ it.name }} <span class="item-cat">&middot; {{ it.shop_label }} &middot; {{ it.category }} &middot; now {{ "%.2f"|format(it.price) }}&euro;</span></li>
+        {% endfor %}
+      </ul>
+      {% if bugs.placeholder|length > 20 %}
+      <div class="empty">&hellip; and {{ bugs.placeholder|length - 20 }} more</div>
+      {% endif %}
+      {% else %}
+      <div class="empty">None found.</div>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="panel" id="bargains">
+    <h2>\U0001F4B0 Really good bargains right now</h2>
+    <p class="meta">Fixed-size items verified 20%+ below their real 30-day low (not just the "was" price), ranked across all shops.</p>
+    {% if bargains %}
+    <table>
+      <tr><th>Item</th><th>Shop</th><th>Category</th><th>Now</th><th>Was</th><th>Below 30d-low</th></tr>
+      {% for d in bargains %}
+      <tr>
+        <td>{{ d.name }}</td>
+        <td>{{ d.shop_label }}</td>
+        <td class="item-cat">{{ d.category }}</td>
+        <td class="price-now">{{ "%.2f"|format(d.price) }}&euro;</td>
+        <td class="price-was">{{ "%.2f"|format(d.full_price) }}&euro;</td>
+        <td class="pct">-{{ "%.0f"|format(d.pct) }}%</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <div class="empty">None found yet.</div>
+    {% endif %}
+  </section>
+
+  <section class="panel" id="export">
+    <h2>\U0001F4E5 Export</h2>
+    <p class="meta">Every item currently showing a discount badge, across all shops -- broader than the verified bargains above, with both the official % off and the % vs the real 30-day low so you can judge which are genuine.</p>
+    <a class="btn" href="/download/sales.csv">Download all sale cases (CSV)</a>
+  </section>
+
   {% for r in shops %}
   <section class="shop" id="shop-{{ r.id }}">
     {% if r.ok %}
@@ -405,7 +481,63 @@ COMPARE_TEMPLATE = (
 @app.route("/")
 def dashboard():
     results = get_all_shop_views()
-    return render_template_string(DASHBOARD_TEMPLATE, shops=results, shop_nav=SHOPS)
+    session = SessionLocal()
+    try:
+        bugs = get_all_bugs(session, SHOP_LABELS)
+        bargains = get_top_bargains(session, SHOP_LABELS)
+    finally:
+        session.close()
+    return render_template_string(
+        DASHBOARD_TEMPLATE, shops=results, bugs=bugs, bargains=bargains, shop_nav=SHOPS
+    )
+
+
+@app.route("/download/sales.csv")
+def download_sales_csv():
+    shop_id = request.args.get("shop_id", type=int)
+    session = SessionLocal()
+    try:
+        rows = get_all_sales(session, SHOP_LABELS, shop_id=shop_id)
+    finally:
+        session.close()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "shop",
+            "category",
+            "product",
+            "price",
+            "full_price",
+            "pct_off_full_price",
+            "30_day_low_price",
+            "pct_below_30_day_low",
+            "verified_real_deal",
+            "snapshot_date",
+        ]
+    )
+    for r in rows:
+        writer.writerow(
+            [
+                r["shop_label"],
+                r["category"],
+                r["name"],
+                f'{r["price"]:.2f}',
+                f'{r["full_price"]:.2f}',
+                f'{r["pct_off_full"]:.1f}',
+                f'{r["l30d_price"]:.2f}' if r["l30d_price"] else "",
+                f'{r["pct_vs_l30d"]:.1f}' if r["pct_vs_l30d"] is not None else "",
+                "yes" if r["is_verified_deal"] else "no",
+                r["snapshot_date"],
+            ]
+        )
+
+    return Response(
+        buf.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=masoutis_sale_cases.csv"},
+    )
 
 
 @app.route("/history/<int:shop_id>")

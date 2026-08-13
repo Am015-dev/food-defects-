@@ -111,3 +111,79 @@ def compare_across_shops(session, shop_labels_by_id, min_shops=2, min_spread_pct
 
     results.sort(key=lambda r: r["spread_pct"], reverse=True)
     return results
+
+
+def get_all_bugs(session, shop_labels_by_id):
+    """Zero-price and placeholder-reference-price bugs across every shop's
+    latest snapshot, each tagged with which shop it's in."""
+    latest = get_latest_snapshots_for_all_shops(session, list(shop_labels_by_id))
+    zero_price = []
+    placeholder = []
+    for shop_id, snap in latest.items():
+        label = shop_labels_by_id[shop_id]
+        for it in get_snapshot_items(session, snap.id):
+            if it.is_zero_price_bug:
+                zero_price.append({"shop_label": label, "name": it.name, "category": it.category})
+            if it.is_placeholder_bug:
+                placeholder.append(
+                    {"shop_label": label, "name": it.name, "category": it.category, "price": it.price}
+                )
+    return {"zero_price": zero_price, "placeholder": placeholder}
+
+
+def get_top_bargains(session, shop_labels_by_id, limit=30):
+    """The best verified deals (fixed-size, >=20% below the real 30-day
+    low) across every shop's latest snapshot, ranked together."""
+    latest = get_latest_snapshots_for_all_shops(session, list(shop_labels_by_id))
+    deals = []
+    for shop_id, snap in latest.items():
+        label = shop_labels_by_id[shop_id]
+        for it in get_snapshot_items(session, snap.id):
+            if it.is_verified_deal:
+                deals.append(
+                    {
+                        "shop_label": label,
+                        "name": it.name,
+                        "category": it.category,
+                        "price": it.price,
+                        "full_price": it.full_price,
+                        "pct": it.deal_pct,
+                    }
+                )
+    deals.sort(key=lambda d: d["pct"], reverse=True)
+    return deals[:limit]
+
+
+def get_all_sales(session, shop_labels_by_id, shop_id=None):
+    """Every item currently showing ANY discount badge (full_price >
+    price), across all shops or one specific shop -- unfiltered by size or
+    verification against the 30-day low, unlike get_top_bargains. Meant
+    for a full CSV export/audit, not for picking out the best deals."""
+    ids = [shop_id] if shop_id is not None else list(shop_labels_by_id)
+    latest = get_latest_snapshots_for_all_shops(session, ids)
+    rows = []
+    for sid, snap in latest.items():
+        label = shop_labels_by_id[sid]
+        for it in get_snapshot_items(session, snap.id):
+            if not (it.full_price and it.price and it.full_price > it.price > 0):
+                continue
+            pct_off_full = (it.full_price - it.price) / it.full_price * 100
+            pct_vs_l30d = None
+            if it.l30d_price and it.l30d_price > 0:
+                pct_vs_l30d = (it.l30d_price - it.price) / it.l30d_price * 100
+            rows.append(
+                {
+                    "shop_label": label,
+                    "name": it.name,
+                    "category": it.category,
+                    "price": it.price,
+                    "full_price": it.full_price,
+                    "l30d_price": it.l30d_price,
+                    "pct_off_full": pct_off_full,
+                    "pct_vs_l30d": pct_vs_l30d,
+                    "is_verified_deal": it.is_verified_deal,
+                    "snapshot_date": snap.snapshot_date,
+                }
+            )
+    rows.sort(key=lambda r: r["pct_off_full"], reverse=True)
+    return rows
