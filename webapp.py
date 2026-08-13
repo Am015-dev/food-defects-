@@ -16,12 +16,10 @@ from efood_client import fetch_restaurant
 from price_analysis import analyze
 from queries import (
     compare_across_shops,
-    get_all_bugs,
     get_all_sales,
     get_history,
     get_latest_snapshot,
     get_snapshot_items,
-    get_top_bargains,
 )
 from shops import SHOPS
 
@@ -480,13 +478,27 @@ COMPARE_TEMPLATE = (
 
 @app.route("/")
 def dashboard():
+    # Each shop's items are already fetched once here; derive the
+    # cross-shop bugs/bargains summaries from that instead of re-querying
+    # the database per shop again (that redundancy was the dashboard's
+    # main cost once tracking more than a handful of shops).
     results = get_all_shop_views()
-    session = SessionLocal()
-    try:
-        bugs = get_all_bugs(session, SHOP_LABELS)
-        bargains = get_top_bargains(session, SHOP_LABELS)
-    finally:
-        session.close()
+    ok_results = [r for r in results if r["ok"]]
+
+    bugs = {
+        "zero_price": [
+            {**it, "shop_label": r["label"]} for r in ok_results for it in r["zero_price_bugs"]
+        ],
+        "placeholder": [
+            {**it, "shop_label": r["label"]} for r in ok_results for it in r["placeholder_bugs"]
+        ],
+    }
+    bargains = sorted(
+        ({**d, "shop_label": r["label"]} for r in ok_results for d in r["verified_deals"]),
+        key=lambda d: d["pct"],
+        reverse=True,
+    )[:30]
+
     return render_template_string(
         DASHBOARD_TEMPLATE, shops=results, bugs=bugs, bargains=bargains, shop_nav=SHOPS
     )
