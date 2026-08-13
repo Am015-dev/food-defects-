@@ -194,7 +194,7 @@ pip install -r requirements.txt
 streamlit run streamlit_app.py -- --db pricewatch.db
 ```
 
-It only reads the local SQLite file `pricewatch.py scan` already writes — no network access of its own. Run a scan first if the DB is empty or missing.
+It only reads the local SQLite file `pricewatch.py scan` already writes — no network access of its own. Run a scan first if the DB is empty or missing. `.streamlit/config.toml` disables Streamlit's own telemetry, so the dashboard makes zero network calls of its own or Streamlit's.
 
 ## Schedule it
 
