@@ -491,6 +491,53 @@ def test_download_csv_filtered_by_shop(client):
     assert "Discount In Shop B" not in body
 
 
+def test_download_csv_category_filter_applies_to_every_shop(client):
+    # Regression: iter_all_sales' per-shop loop reused the name `category`
+    # for both the filter parameter AND the row-unpacking variable in the
+    # inner "for name, category, ... in discounted" loop. Since Python
+    # for-loops don't scope, that clobbered the filter parameter with the
+    # last row's raw category value after the first shop -- so a category
+    # filter silently stopped matching every shop after the first, unless
+    # they happened to share the exact same subcategory string.
+    def catalog_with_category(category_group, item):
+        return {
+            "information": {"title": "T", "address": {"description": "A"}, "is_open": True},
+            "menu": {"categories": [{"name": category_group, "items": [item]}]},
+        }
+
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            TODAY,
+            catalog_with_category(
+                "Τρόφιμα || Ζυμαρικά",
+                {"id": 1, "code": "c1", "name": "Pasta Deal", "price": 1.0, "full_price": 2.0, "tags": []},
+            ),
+        )
+        store_snapshot(
+            session,
+            SHOP_B,
+            SHOP_B_LABEL,
+            TODAY,
+            catalog_with_category(
+                "Τρόφιμα || Κρέας",  # different subcategory, still under "Τρόφιμα"
+                {"id": 2, "code": "c2", "name": "Meat Deal", "price": 3.0, "full_price": 5.0, "tags": []},
+            ),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    resp = client.get("/download/sales.csv", query_string={"category": "Τρόφιμα"})
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "Pasta Deal" in body
+    assert "Meat Deal" in body
+
+
 def test_item_page_unknown_shop_404s(client):
     resp = client.get("/item/999999/some-code")
     assert resp.status_code == 404

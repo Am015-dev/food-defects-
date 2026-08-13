@@ -12,6 +12,18 @@ from db import ItemPrice, Snapshot
 from price_utils import fold_name
 
 
+def _apply_text_filters(query, q=None, category=None):
+    """Narrow a query by product-name substring (folded, so it's accent-
+    and case-insensitive -- see price_utils.fold_name) and/or top-level
+    category prefix. Shared by every ItemPrice query that filters this
+    way, so the matching rule only has to change in one place."""
+    if category:
+        query = query.filter(ItemPrice.category.ilike(f"{category}%"))
+    if q:
+        query = query.filter(ItemPrice.name_fold.ilike(f"%{fold_name(q)}%"))
+    return query
+
+
 def get_latest_snapshot(session, shop_id):
     return (
         session.query(Snapshot)
@@ -71,11 +83,7 @@ def _shop_price_drops_query(session, sid, newest, previous, q=None, category=Non
             ItemPrice.price < Yesterday.price,
         )
     )
-    if category:
-        query = query.filter(ItemPrice.category.ilike(f"{category}%"))
-    if q:
-        query = query.filter(ItemPrice.name_fold.ilike(f"%{fold_name(q)}%"))
-    return query
+    return _apply_text_filters(query, q=q, category=category)
 
 
 def _get_previous_snapshot(session, shop_id, before_date):
@@ -243,8 +251,7 @@ def get_flagged_items_filtered(session, snapshot_id, q=None, bug_type=None):
                 ItemPrice.is_verified_deal.is_(True),
             )
         )
-    if q:
-        query = query.filter(ItemPrice.name_fold.ilike(f"%{fold_name(q)}%"))
+    query = _apply_text_filters(query, q=q)
     return query.all()
 
 
@@ -307,10 +314,7 @@ def get_deals_page(
         ItemPrice.snapshot_id.in_(list(shop_by_snapshot)),
         ItemPrice.is_verified_deal.is_(True),
     )
-    if category:
-        query = query.filter(ItemPrice.category.ilike(f"{category}%"))
-    if q:
-        query = query.filter(ItemPrice.name_fold.ilike(f"%{fold_name(q)}%"))
+    query = _apply_text_filters(query, q=q, category=category)
     if min_pct:
         query = query.filter(ItemPrice.deal_pct >= min_pct)
 
@@ -459,10 +463,8 @@ def search_products(
     ).filter(
         ItemPrice.snapshot_id.in_(list(shop_by_snapshot)),
         ItemPrice.price > 0,
-        ItemPrice.name_fold.ilike(f"%{fold_name(q)}%"),
     )
-    if category:
-        query = query.filter(ItemPrice.category.ilike(f"{category}%"))
+    query = _apply_text_filters(query, q=q, category=category)
 
     total = query.count()
 
@@ -540,10 +542,7 @@ def compare_across_shops(
             )
             .filter(ItemPrice.snapshot_id == snap.id, ItemPrice.price > 0)
         )
-        if q:
-            query = query.filter(ItemPrice.name_fold.ilike(f"%{fold_name(q)}%"))
-        if category:
-            query = query.filter(ItemPrice.category.ilike(f"{category}%"))
+        query = _apply_text_filters(query, q=q, category=category)
         label = shop_labels_by_id[shop_id]
         for name, price, category_value, size_info, metric_unit_description in query.all():
             by_name[name].append(
@@ -624,13 +623,10 @@ def iter_all_sales(session, shop_labels_by_id, shop_id=None, q=None, category=No
                 ItemPrice.price > 0,
             )
         )
-        if q:
-            query = query.filter(ItemPrice.name_fold.ilike(f"%{fold_name(q)}%"))
-        if category:
-            query = query.filter(ItemPrice.category.ilike(f"{category}%"))
+        query = _apply_text_filters(query, q=q, category=category)
         discounted = query.all()
         rows = []
-        for name, category, price, full_price, l30d, is_deal, code in discounted:
+        for name, cat, price, full_price, l30d, is_deal, code in discounted:
             pct_off_full = (full_price - price) / full_price * 100
             pct_vs_l30d = None
             if l30d and l30d > 0:
@@ -640,7 +636,7 @@ def iter_all_sales(session, shop_labels_by_id, shop_id=None, q=None, category=No
                     "shop_id": sid,
                     "shop_label": label,
                     "name": name,
-                    "category": category,
+                    "category": cat,
                     "code": code,
                     "price": price,
                     "full_price": full_price,
