@@ -326,7 +326,7 @@ DASHBOARD_TEMPLATE = (
 <body>
 <header>
   <h1>\U0001F6D2 Masoutis price-defect dashboard</h1>
-  <p>Backed by daily snapshots across {{ shops|length }} storefronts. Shops with no saved snapshot yet show live data instead.</p>
+  <p>Backed by daily snapshots across {{ shops|length }} storefronts, refreshed automatically when the day's data is missing.</p>
 </header>
 """
     + NAV
