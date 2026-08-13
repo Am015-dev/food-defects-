@@ -1,0 +1,132 @@
+# MISTAKES.md
+
+A running log of mistakes made while working on this repo, and what
+fixed or would have prevented them. Not a changelog — only things that
+were actually wrong at some point and had to be caught or fixed.
+
+Check this file before touching an area listed below. Add an entry
+whenever you catch yourself in a real mistake (not a typo you fixed
+before running anything) — something a test, a lint pass, a second look,
+or the user caught. Skip anything that was just an unfinished draft.
+
+## Entry format
+
+```
+## YYYY-MM-DD — short title
+**Where:** file(s)/area
+**What happened:** the actual wrong behavior
+**Root cause:** why it happened, not just what
+**Fix:** what changed
+**Lesson:** the general rule to carry forward
+```
+
+---
+
+## 2026-08-13 — string replace mangled a literal period in a unit suffix
+
+**Where:** `price_utils.py`, `format_normalized_price`
+
+**What happened:** Formatted a price as `f'{value:.2f}€/τεμ.'` then called
+`.replace('.', ',')` on the whole string to turn the decimal point into a
+comma (Greek number formatting). The blind replace also caught the
+literal trailing dot in the Greek abbreviation "τεμ.", producing
+`"0,06€/τεμ,"` instead of `"0,06€/τεμ."`.
+
+**Root cause:** `.replace('.', ',')` was applied to the fully-assembled
+string, not just the numeric part. Any other literal `.` character
+composed into the string is fair game for the same bug — trailing
+periods, abbreviations, etc.
+
+**Fix:** Format the decimal separator on the number alone
+(`f'{value:.2f}'.replace('.', ',')`) *before* concatenating the unit
+suffix, never after.
+
+**Lesson:** Never call a blind find/replace on a string after other
+literal text has already been appended to it. Do the replace on the
+narrowest possible substring, first.
+
+---
+
+## 2026-08-13 — test stub dict missing keys caused a Jinja `Undefined` crash
+
+**Where:** `tests/test_routes.py`, stubbing `webapp.fetch_menu_item`
+
+**What happened:** A test monkeypatched `fetch_menu_item` to return
+`{"price": 1.68, "is_available": True, "tags": []}` — missing
+`full_price` and `calculated_price`. The template did
+`live.full_price|eur`, which raised `TypeError: unsupported format
+string passed to Undefined.__format__`.
+
+**Root cause:** In Jinja, dict-style access via dot notation
+(`live.full_price`) on a dict *missing that key* returns the special
+`Undefined` sentinel, not `None`. A key that exists with value `None`
+formats fine; a key that's simply absent does not. Test stubs built by
+guessing "the fields the code reads" instead of mirroring the real
+API's response shape will miss this distinction.
+
+**Fix:** Stub the full field set the real API actually returns
+(`full_price`, `calculated_price`, `is_available`, `tags`, even when
+`None`), not just the fields the specific test cares about.
+
+**Lesson:** When stubbing an external API response for a test, include
+every key the code path touches with an explicit value (even `None`) —
+don't rely on `.get()`-like leniency you haven't verified the consuming
+code actually has.
+
+---
+
+## 2026-08-13 — a test triggered a real background network call and leaked global state across the suite
+
+**Where:** `tests/test_routes.py`, POST `/refresh` tests; `webapp.py`
+module-level `_refresh_state`
+
+**What happened:** A test posted to `/refresh`, which called the real
+`_shops_needing_refresh()` — this found the ~11 tracked shops the test
+fixture hadn't seeded and started a real background thread trying to
+fetch them from the live e-food API. That thread left the module-level
+`_refresh_state["running"]` stuck `True`, which caused an *unrelated*
+later test (the dashboard staleness banner) to fail, because the
+dashboard template shows the "refresh running" banner ahead of the
+"stale" banner.
+
+**Root cause:** `_refresh_state` is process-global, not per-test-request
+state, so one test's side effect silently changed another test's
+observed behavior — classic shared mutable state between tests. The
+route under test had a real, non-mocked side effect (network I/O) that
+had nothing to do with what the test was actually checking (response
+shape).
+
+**Fix:** Added an autouse `monkeypatch` fixture in `conftest.py` that
+forces `_shops_needing_refresh()` to return `[]` for every test, so
+`/refresh` never has anything to do and never spawns a thread.
+
+**Lesson:** Before writing a test against a route, check whether it has
+side effects beyond the response (background threads, outbound network
+calls, module-level globals) and neutralize them explicitly — don't
+assume a fresh DB per test also means fresh process state.
+
+---
+
+## 2026-08-13 — picked a lint config that would have required reflowing normal prose
+
+**Where:** `pyproject.toml` (ruff config), first pass
+
+**What happened:** Ran `ruff check` with the default 88-char line length
+against the whole repo before adding a config, and got dozens of hits
+that were just normal-length Greek UI strings and docstrings, not real
+problems.
+
+**Root cause:** Adopted a lint default without first checking whether it
+fit the codebase's actual content — a UI string in Greek (or any
+non-Latin script with mixed byte-width considerations) commonly runs
+longer than 88 columns for a perfectly reasonable sentence.
+
+**Fix:** Set `line-length = 110` in `pyproject.toml`, then fixed the 3
+genuine remaining hits (two ambiguous `l` variable names, one function
+signature) instead of suppressing rules or reflowing prose.
+
+**Lesson:** When introducing a linter to an existing codebase, run it
+unconfigured first to see what the *real* signal-to-noise ratio is
+before deciding between "fix everything," "adjust the threshold," or
+"suppress the rule" — don't default to the tool's out-of-the-box
+settings without checking they fit the content.
