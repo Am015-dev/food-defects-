@@ -5,6 +5,8 @@ is intended for low-frequency, personal, non-commercial use, not bulk or
 high-frequency crawling.
 """
 
+from urllib.parse import urlencode
+
 import requests
 
 BASE_URL = "https://api.e-food.gr"
@@ -33,10 +35,8 @@ def fetch_restaurant(restaurant_id, timeout=25):
 def menu_item_url(restaurant_id, item_code):
     """The public API URL for a single product -- shown on the verification
     page so a finding can be checked against e-food directly."""
-    return (
-        f"{BASE_URL}/api/v1/restaurants/menuitem/"
-        f"?item_code={item_code}&restaurant_id={restaurant_id}"
-    )
+    query = urlencode({"item_code": item_code, "restaurant_id": restaurant_id})
+    return f"{BASE_URL}/api/v1/restaurants/menuitem/?{query}"
 
 
 def fetch_menu_item(restaurant_id, item_code, timeout=20):

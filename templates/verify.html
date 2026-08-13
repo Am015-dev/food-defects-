@@ -83,7 +83,7 @@
           <td>{{ row.shop_label }}</td>
           <td class="price-now">{{ row.price|eur }}</td>
           <td class="item-cat">{{ row.size_info or '—' }}</td>
-          <td class="num" title="Τιμή ανά 100g{% if row.normalized_price %}: {{ row.normalized_display }}{% endif %}">{{ row.normalized_display }}</td>
+          <td class="num" title="Κανονικοποιημένη τιμή{% if row.normalized_price %}: {{ row.normalized_display }}{% endif %}">{{ row.normalized_display }}</td>
         </tr>
         {% endfor %}
       </tbody>

@@ -77,6 +77,10 @@ class ItemPrice(Base):
     full_price = Column(Float)
     l30d_price = Column(Float)
     size_info = Column(String)
+    metric_unit_description = Column(String)  # e-food's own unit price, e.g. "3,36€ / kg"
+    unit_price = Column(Float)  # parsed from metric_unit_description (or size_info fallback)
+    unit_kind = Column(String)  # "kg" / "lt" / "τεμ" / ...
+    name_fold = Column(String)  # accent-stripped, casefolded name, for search
     is_zero_price_bug = Column(Boolean, default=False)
     is_placeholder_bug = Column(Boolean, default=False)
     is_verified_deal = Column(Boolean, default=False)
@@ -99,10 +103,18 @@ def _add_missing_columns():
     if not inspector.has_table("item_prices"):
         return
     existing = {c["name"] for c in inspector.get_columns("item_prices")}
-    if "code" not in existing:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE item_prices ADD COLUMN code VARCHAR"))
-        print("db: added item_prices.code")
+    new_columns = {
+        "code": "VARCHAR",
+        "metric_unit_description": "VARCHAR",
+        "unit_price": "FLOAT",
+        "unit_kind": "VARCHAR",
+        "name_fold": "VARCHAR",
+    }
+    for name, sql_type in new_columns.items():
+        if name not in existing:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE item_prices ADD COLUMN {name} {sql_type}"))
+            print(f"db: added item_prices.{name}")
 
 
 def _ensure_indexes():
@@ -118,6 +130,10 @@ def _ensure_indexes():
         "CREATE INDEX IF NOT EXISTS ix_item_prices_snapshot ON item_prices (snapshot_id)",
         "CREATE INDEX IF NOT EXISTS ix_item_prices_snapshot_category ON item_prices (snapshot_id, category)",
         "CREATE INDEX IF NOT EXISTS ix_snapshots_shop_date ON snapshots (shop_id, snapshot_date)",
+        # Powers get_item_history_by_code and the verify page's snapshot
+        # fallback search, both of which filter by code across all of a
+        # shop's history -- without this they full-scan item_prices.
+        "CREATE INDEX IF NOT EXISTS ix_item_prices_code ON item_prices (code)",
     ]
     with engine.begin() as conn:
         for statement in statements:

@@ -1,5 +1,5 @@
-requests
-flask
-gunicorn
-sqlalchemy
-psycopg2-binary
+requests==2.33.1
+flask==3.1.0
+gunicorn==26.0.0
+sqlalchemy==2.0.52
+psycopg2-binary==2.9.12

@@ -21,7 +21,7 @@ from flask import (
     request,
     url_for,
 )
-from sqlalchemy import func
+from sqlalchemy import text
 
 from charts import line_chart
 from db import ItemPrice, SessionLocal, Snapshot, init_db
@@ -460,7 +460,9 @@ def compare():
     # Add normalized price info to each row for comparison
     for group in groups:
         for row in group["rows"]:
-            comparison_info = get_price_comparison_info(row["price"], row.get("size_info"))
+            comparison_info = get_price_comparison_info(
+                row["price"], row.get("size_info"), row.get("metric_unit_description")
+            )
             row.update(comparison_info)
 
     total = len(groups)
@@ -515,9 +517,11 @@ def history(shop_id):
     )
 
 
-@app.route("/refresh", methods=["POST", "GET"])
+@app.route("/refresh", methods=["POST"])
 def refresh():
-    """Kick off (or report on) the background data refresh."""
+    """Kick off (or report on) the background data refresh. POST-only so a
+    link prefetcher or crawler can't trigger an outbound fetch to every
+    tracked shop just by requesting the URL."""
     running = maybe_start_refresh()
     status = refresh_status()
     status["running"] = running or status["running"]
@@ -655,7 +659,9 @@ def verify_item(shop_id, code):
                 )
                 # Add normalized price info to each comparison row
                 for row in shop_comparison:
-                    comparison_info = get_price_comparison_info(row["price"], row.get("size_info"))
+                    comparison_info = get_price_comparison_info(
+                        row["price"], row.get("size_info"), row.get("metric_unit_description")
+                    )
                     row.update(comparison_info)
             except Exception:  # noqa: BLE001
                 # If comparison fails, just continue without it
@@ -735,9 +741,34 @@ def verify_item(shop_id, code):
     )
 
 
+@app.route("/robots.txt")
+def robots_txt():
+    # /compare scans the full catalog per request and /download/ streams a
+    # multi-MB CSV -- fine for a human occasionally, not for a crawler.
+    body = "User-agent: *\nDisallow: /compare\nDisallow: /download/\n"
+    return Response(body, mimetype="text/plain")
+
+
 @app.route("/healthz")
 def healthz():
-    return {"status": "ok"}
+    """Render's health check hits this. A static {"status": "ok"} would
+    keep passing even if the database were unreachable, so this probes it
+    and reports the newest snapshot -- if ingestion has silently stalled,
+    that's visible here rather than only inside DB-backed routes 500ing."""
+    session = SessionLocal()
+    try:
+        session.execute(text("SELECT 1"))
+        newest = (
+            session.query(Snapshot.snapshot_date)
+            .order_by(Snapshot.snapshot_date.desc())
+            .limit(1)
+            .first()
+        )
+        return {"status": "ok", "newest_snapshot_date": newest[0] if newest else None}
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "error", "detail": str(exc)}, 503
+    finally:
+        session.close()
 
 
 if __name__ == "__main__":

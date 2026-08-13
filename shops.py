@@ -1,14 +1,12 @@
-"""Supermarkets on e-food.gr tracked by the dashboard, all within ~5km of
-Chalandri.
+"""Supermarkets on e-food.gr tracked by the dashboard, mostly within ~5km
+of Chalandri, plus a couple of explicitly requested outliers further out.
 
 Discovered via e-food's public nearby-restaurants search centered on
 Chalandri (38.0207, 23.7999), filtered to businesses tagged with the
 "Supermarket" cuisine, then filtered again by real straight-line distance
 (the search API's own "distance" field turned out to be unreliable --
 another one of e-food's data bugs -- so distances below were computed
-from each store's own lat/long instead). A few further-out results
-(Carrefour in Pagkrati, Sklavenitis in Spata, ~7-11km away) were dropped
-as not actually "close to Chalandri".
+from each store's own lat/long instead).
 
 "slug" is the shop's public page path on e-food.gr, taken from the same
 search response; the full URL is https://www.e-food.gr/delivery{slug}.
@@ -75,6 +73,11 @@ SHOPS = [
         "id": 6245632,
         "label": "Σκλαβενίτης Express - Γέρακας",  # 4.22km
         "slug": "/gerakas/sklavenitis-express-6245632",
+    },
+    {
+        "id": 8542676,
+        "label": "Σκλαβενίτης - Σπάτα",  # ~10km, explicitly requested
+        "slug": "/spata/sklavenitis-supermarket-8542676",
     },
 ]
 

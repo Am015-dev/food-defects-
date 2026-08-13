@@ -135,8 +135,8 @@
 <section class="panel" id="shop-{{ r.id }}">
   {% if r.no_data %}
   <h2>{{ r.label }} <span class="source-tag">χωρίς δεδομένα</span></h2>
-  <div class="empty">Δεν υπάρχει ακόμη στιγμιότυπο. Θα ληφθεί αυτόματα στην επόμενη ανανέωση.</div>
-  {% elif r.ok %}
+  <div class="empty">Δεν υπάρχει ακόμη στιγμιότυπο. Θα ληφθεί στην επόμενη προγραμματισμένη ενημέρωση.</div>
+  {% else %}
   <h2>{{ r.title }} <span class="item-cat">— {{ r.label }}</span> <span class="source-tag">{{ r.snapshot_date|grdate }}</span></h2>
   <p class="meta">{{ r.address }} · {{ "Ανοιχτό τώρα" if r.is_open else "Κλειστό" }}</p>
   <div class="stats">
@@ -163,9 +163,6 @@
     </table>
   </div>
   {% endif %}
-  {% else %}
-  <h2>{{ r.label }}</h2>
-  <div class="error">Αποτυχία ανάγνωσης: {{ r.error }}</div>
   {% endif %}
 </section>
 {% endfor %}

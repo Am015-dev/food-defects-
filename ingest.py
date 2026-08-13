@@ -3,10 +3,11 @@ Daily ingestion: fetch every tracked shop and store a snapshot in the
 database. Safe to call more than once on the same UTC day -- it replaces
 that day's snapshot per shop rather than duplicating it.
 
-Can be run as a CLI (`python ingest.py`) or triggered over HTTP via the
-web app's /ingest endpoint (see webapp.py), which is what the daily
-GitHub Actions workflow calls -- Render's free tier doesn't offer a free
-cron job service type, so scheduling lives in GitHub Actions instead.
+Run as a CLI (`python ingest.py`) directly against the production
+database -- see .github/workflows/daily-ingest.yml, which is what runs
+this on a schedule. Render's free tier doesn't offer a free cron job
+service type, so scheduling lives in GitHub Actions instead, on a
+runner with its own RAM rather than the memory-constrained web service.
 """
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,6 +22,7 @@ from price_analysis import (
     l30d_price,
     load_items,
 )
+from price_utils import derive_unit_price, fold_name
 from shops import SHOPS
 
 MAX_CONCURRENCY = 2  # how many shops to fetch+store at once
@@ -66,24 +68,33 @@ def store_snapshot(session, shop_id, label, today, data):
     session.add(snapshot)
     session.flush()  # assigns snapshot.id
 
-    rows = [
-        ItemPrice(
-            snapshot_id=snapshot.id,
-            item_id=it["id"],
-            code=it.get("code"),
-            name=it["name"],
-            category=it["_category"],
-            price=it.get("price"),
-            full_price=it.get("full_price"),
-            l30d_price=l30d_price(it),
-            size_info=it.get("size_info"),
-            is_zero_price_bug=it["id"] in zero_bug_ids,
-            is_placeholder_bug=it["id"] in placeholder_bug_ids,
-            is_verified_deal=it["id"] in deal_pct_by_id,
-            deal_pct=deal_pct_by_id.get(it["id"]),
+    rows = []
+    for it in items:
+        price = it.get("price")
+        size_info = it.get("size_info")
+        metric_unit_description = it.get("metric_unit_description")
+        unit_price, unit_kind = derive_unit_price(price, size_info, metric_unit_description)
+        rows.append(
+            ItemPrice(
+                snapshot_id=snapshot.id,
+                item_id=it["id"],
+                code=it.get("code"),
+                name=it["name"],
+                name_fold=fold_name(it["name"]),
+                category=it["_category"],
+                price=price,
+                full_price=it.get("full_price"),
+                l30d_price=l30d_price(it),
+                size_info=size_info,
+                metric_unit_description=metric_unit_description,
+                unit_price=unit_price,
+                unit_kind=unit_kind,
+                is_zero_price_bug=it["id"] in zero_bug_ids,
+                is_placeholder_bug=it["id"] in placeholder_bug_ids,
+                is_verified_deal=it["id"] in deal_pct_by_id,
+                deal_pct=deal_pct_by_id.get(it["id"]),
+            )
         )
-        for it in items
-    ]
     session.bulk_save_objects(rows)
     session.commit()
     return len(rows)

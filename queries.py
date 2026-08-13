@@ -60,6 +60,7 @@ def get_product_across_shops(session, product_name, shop_labels, exclude_shop_id
                 "full_price": item.full_price,
                 "l30d_price": item.l30d_price,
                 "size_info": item.size_info,
+                "metric_unit_description": item.metric_unit_description,
                 "category": item.category,
             })
 
@@ -67,18 +68,12 @@ def get_product_across_shops(session, product_name, shop_labels, exclude_shop_id
     return sorted(results, key=lambda r: r["price"])
 
 
-def get_snapshot_items(session, snapshot_id):
-    """Every item in a snapshot. Expensive for a big catalog (thousands of
-    rows) -- prefer get_flagged_items or a filtered query when only a
-    subset is actually needed."""
-    return session.query(ItemPrice).filter_by(snapshot_id=snapshot_id).all()
-
-
 def get_flagged_items(session, snapshot_id):
     """Only the items worth showing on the dashboard: bugs and verified
-    deals. A tiny fraction of a snapshot's rows, unlike get_snapshot_items
-    -- this is what keeps loading 12 shops' worth of data from ballooning
-    into tens of thousands of ORM objects for one page render."""
+    deals. A tiny fraction of a snapshot's rows, unlike querying every
+    item in a snapshot unfiltered would be -- this is what keeps loading
+    a dozen shops' worth of data from ballooning into tens of thousands
+    of ORM objects for one page render."""
     return (
         session.query(ItemPrice)
         .filter(
@@ -252,19 +247,6 @@ def get_history(session, shop_id, limit=60):
     return list(reversed(rows))
 
 
-def get_item_history(session, shop_id, item_id, limit=60):
-    """Oldest-to-newest price history for one specific product in one shop."""
-    rows = (
-        session.query(ItemPrice, Snapshot.snapshot_date)
-        .join(Snapshot, ItemPrice.snapshot_id == Snapshot.id)
-        .filter(Snapshot.shop_id == shop_id, ItemPrice.item_id == item_id)
-        .order_by(Snapshot.snapshot_date.desc())
-        .limit(limit)
-        .all()
-    )
-    return list(reversed(rows))
-
-
 def get_latest_snapshots_for_all_shops(session, shop_ids):
     latest = {}
     for shop_id in shop_ids:
@@ -297,7 +279,13 @@ def compare_across_shops(
         # Materializing full ORM objects for that is what this instance
         # cannot afford.
         query = (
-            session.query(ItemPrice.name, ItemPrice.price, ItemPrice.category, ItemPrice.size_info)
+            session.query(
+                ItemPrice.name,
+                ItemPrice.price,
+                ItemPrice.category,
+                ItemPrice.size_info,
+                ItemPrice.metric_unit_description,
+            )
             .filter(ItemPrice.snapshot_id == snap.id, ItemPrice.price > 0)
         )
         if q:
@@ -305,7 +293,7 @@ def compare_across_shops(
         if category:
             query = query.filter(ItemPrice.category.ilike(f"{category}%"))
         label = shop_labels_by_id[shop_id]
-        for name, price, category_value, size_info in query.all():
+        for name, price, category_value, size_info, metric_unit_description in query.all():
             by_name[name].append(
                 {
                     "shop_id": shop_id,
@@ -313,6 +301,7 @@ def compare_across_shops(
                     "price": price,
                     "category": category_value,
                     "size_info": size_info,
+                    "metric_unit_description": metric_unit_description,
                 }
             )
 
