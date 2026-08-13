@@ -10,18 +10,23 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn webapp:app --timeout 120
+    # Pinned to a single worker on purpose: Render sets WEB_CONCURRENCY
+    # automatically and gunicorn would honour it, multiplying baseline
+    # memory by the worker count on a 512MB instance. Threads handle the
+    # concurrency instead, and workers are recycled periodically so no
+    # slow leak can accumulate.
+    startCommand: >-
+      gunicorn webapp:app
+      --workers 1
+      --threads 4
+      --timeout 60
+      --max-requests 200
+      --max-requests-jitter 50
     healthCheckPath: /healthz
     envVars:
+      - key: WEB_CONCURRENCY
+        value: 1
       - key: DATABASE_URL
         fromDatabase:
           name: food-defects-db
           property: connectionString
-      - key: INGEST_SECRET
-        generateValue: true
-      - key: SMTP_USER
-        sync: false
-      - key: SMTP_PASSWORD
-        sync: false
-      - key: NOTIFY_EMAIL_TO
-        sync: false

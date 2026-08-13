@@ -88,17 +88,25 @@ def compare_across_shops(session, shop_labels_by_id, min_shops=2, min_spread_pct
 
     by_name = defaultdict(list)
     for shop_id, snap in latest.items():
-        items = get_snapshot_items(session, snap.id)
-        for it in items:
-            if it.price and it.price > 0:
-                by_name[it.name].append(
-                    {
-                        "shop_id": shop_id,
-                        "shop_label": shop_labels_by_id[shop_id],
-                        "price": it.price,
-                        "category": it.category,
-                    }
-                )
+        # Column-only query: this walks every product in every shop
+        # (~85k rows across 12 shops), and only three fields are needed.
+        # Materializing full ORM objects for that is what this instance
+        # cannot afford.
+        rows = (
+            session.query(ItemPrice.name, ItemPrice.price, ItemPrice.category)
+            .filter(ItemPrice.snapshot_id == snap.id, ItemPrice.price > 0)
+            .all()
+        )
+        label = shop_labels_by_id[shop_id]
+        for name, price, category in rows:
+            by_name[name].append(
+                {
+                    "shop_id": shop_id,
+                    "shop_label": label,
+                    "price": price,
+                    "category": category,
+                }
+            )
 
     results = []
     for name, rows in by_name.items():
@@ -135,20 +143,31 @@ def compare_across_shops(session, shop_labels_by_id, min_shops=2, min_spread_pct
     return results
 
 
-def get_all_sales(session, shop_labels_by_id, shop_id=None):
-    """Every item currently showing ANY discount badge (full_price >
+def iter_all_sales(session, shop_labels_by_id, shop_id=None):
+    """Yield every item currently showing ANY discount badge (full_price >
     price), across all shops or one specific shop -- unfiltered by size or
-    verification against the 30-day low. Meant for a full CSV export/audit,
-    not for picking out the best deals (the dashboard derives that
-    narrower, verified view from data it already has in hand instead of
-    querying again here)."""
+    verification against the 30-day low. Meant for a full CSV export/audit.
+
+    A generator over per-shop, column-only queries rather than a big list:
+    the export covers ~10k rows, and neither the ORM objects nor the
+    assembled CSV text should ever exist in memory all at once on a
+    512MB instance. Rows come out grouped by shop, sorted by discount
+    within each shop (a global sort would mean buffering everything,
+    which is exactly what this avoids).
+    """
     ids = [shop_id] if shop_id is not None else list(shop_labels_by_id)
     latest = get_latest_snapshots_for_all_shops(session, ids)
-    rows = []
     for sid, snap in latest.items():
         label = shop_labels_by_id[sid]
-        discounted_items = (
-            session.query(ItemPrice)
+        discounted = (
+            session.query(
+                ItemPrice.name,
+                ItemPrice.category,
+                ItemPrice.price,
+                ItemPrice.full_price,
+                ItemPrice.l30d_price,
+                ItemPrice.is_verified_deal,
+            )
             .filter(
                 ItemPrice.snapshot_id == snap.id,
                 ItemPrice.full_price > ItemPrice.price,
@@ -156,24 +175,25 @@ def get_all_sales(session, shop_labels_by_id, shop_id=None):
             )
             .all()
         )
-        for it in discounted_items:
-            pct_off_full = (it.full_price - it.price) / it.full_price * 100
+        rows = []
+        for name, category, price, full_price, l30d, is_deal in discounted:
+            pct_off_full = (full_price - price) / full_price * 100
             pct_vs_l30d = None
-            if it.l30d_price and it.l30d_price > 0:
-                pct_vs_l30d = (it.l30d_price - it.price) / it.l30d_price * 100
+            if l30d and l30d > 0:
+                pct_vs_l30d = (l30d - price) / l30d * 100
             rows.append(
                 {
                     "shop_label": label,
-                    "name": it.name,
-                    "category": it.category,
-                    "price": it.price,
-                    "full_price": it.full_price,
-                    "l30d_price": it.l30d_price,
+                    "name": name,
+                    "category": category,
+                    "price": price,
+                    "full_price": full_price,
+                    "l30d_price": l30d,
                     "pct_off_full": pct_off_full,
                     "pct_vs_l30d": pct_vs_l30d,
-                    "is_verified_deal": it.is_verified_deal,
+                    "is_verified_deal": is_deal,
                     "snapshot_date": snap.snapshot_date,
                 }
             )
-    rows.sort(key=lambda r: r["pct_off_full"], reverse=True)
-    return rows
+        rows.sort(key=lambda r: r["pct_off_full"], reverse=True)
+        yield from rows

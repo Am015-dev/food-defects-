@@ -4,22 +4,18 @@ storefronts on e-food.gr, backed by daily snapshots in the database
 """
 
 import csv
-import hmac
 import io
-import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from flask import Flask, Response, abort, jsonify, render_template_string, request
+from flask import Flask, Response, abort, render_template_string, request
 
 from db import SessionLocal, init_db
-from efood_client import fetch_restaurant
-from price_analysis import analyze
 from queries import (
     compare_across_shops,
-    get_all_sales,
     get_flagged_items,
     get_history,
     get_latest_snapshot,
+    iter_all_sales,
 )
 from shops import SHOPS
 
@@ -29,12 +25,10 @@ try:
 except Exception as exc:  # noqa: BLE001
     # Don't let a still-unreachable database at boot time take the whole
     # process down -- /healthz should still come up, and DB-backed routes
-    # will surface their own errors (or fall back to a live fetch, for
-    # the per-shop dashboard cards) once the database is reachable.
+    # recover on their own once the database is reachable.
     print(f"WARNING: init_db() failed at startup, continuing anyway: {exc}")
 
 SHOP_LABELS = {s["id"]: s["label"] for s in SHOPS}
-INGEST_SECRET = os.environ.get("INGEST_SECRET", "")
 
 
 def view_from_snapshot(session, shop_id, label, snapshot):
@@ -79,42 +73,32 @@ def view_from_snapshot(session, shop_id, label, snapshot):
     }
 
 
-def view_from_live_fetch(shop_id, label):
-    try:
-        data = fetch_restaurant(shop_id)
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "id": shop_id, "label": label, "error": str(exc)}
+def empty_view(shop_id, label):
+    """Shown when a shop has no stored snapshot yet.
 
-    a = analyze(data)
-    info = a["information"]
+    This deliberately does NOT fall back to fetching the shop's catalog
+    live. Doing that used up ~460MB on a single request with an empty
+    database (12 shops x a ~15MB JSON catalog, several times that once
+    parsed, all fetched concurrently) and is what kept getting this
+    service OOM-killed on a 512MB instance. The web service now only
+    ever reads pre-digested rows out of the database; fetching catalogs
+    is the ingest job's business, and it runs elsewhere.
+    """
     return {
         "ok": True,
+        "no_data": True,
         "id": shop_id,
         "label": label,
-        "source": "live",
+        "source": "none",
         "snapshot_date": None,
-        "title": info["title"],
-        "address": info["address"]["description"],
-        "is_open": info["is_open"],
-        "total_items": a["total_items"],
-        "total_categories": a["total_categories"],
-        "zero_price_bugs": [
-            {"name": it["name"], "category": it["_category"]} for it in a["zero_price_bugs"]
-        ],
-        "placeholder_bugs": [
-            {"name": it["name"], "category": it["_category"], "price": it["price"]}
-            for it in a["placeholder_reference_bugs"]
-        ],
-        "verified_deals": [
-            {
-                "name": d["item"]["name"],
-                "category": d["item"]["_category"],
-                "price": d["item"]["price"],
-                "full_price": d["item"]["full_price"],
-                "pct": d["pct"],
-            }
-            for d in a["verified_deals"]
-        ],
+        "title": label,
+        "address": None,
+        "is_open": None,
+        "total_items": 0,
+        "total_categories": 0,
+        "zero_price_bugs": [],
+        "placeholder_bugs": [],
+        "verified_deals": [],
     }
 
 
@@ -124,16 +108,19 @@ def get_shop_view(shop_id, label):
     session = SessionLocal()
     try:
         snapshot = get_latest_snapshot(session, shop_id)
-        if snapshot is not None:
-            return view_from_snapshot(session, shop_id, label, snapshot)
-        return view_from_live_fetch(shop_id, label)
+        if snapshot is None:
+            return empty_view(shop_id, label)
+        return view_from_snapshot(session, shop_id, label, snapshot)
     finally:
         session.close()
 
 
 def get_all_shop_views():
+    # Bounded pool: these are small indexed reads now, but one DB
+    # connection per shop simultaneously is still needless pressure on a
+    # free-tier Postgres connection limit.
     results = [None] * len(SHOPS)
-    with ThreadPoolExecutor(max_workers=len(SHOPS)) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         future_to_index = {
             pool.submit(get_shop_view, shop["id"], shop["label"]): i
             for i, shop in enumerate(SHOPS)
@@ -306,9 +293,12 @@ DASHBOARD_TEMPLATE = (
 
   {% for r in shops %}
   <section class="shop" id="shop-{{ r.id }}">
-    {% if r.ok %}
+    {% if r.no_data %}
+      <h2>{{ r.label }} <span class="source-tag">no data yet</span></h2>
+      <div class="empty">No snapshot stored for this shop yet. Run the "Daily catalog ingest" workflow to populate it.</div>
+    {% elif r.ok %}
       <h2>{{ r.title }} <span class="meta">&mdash; {{ r.label }}</span>
-        <span class="source-tag">{{ r.snapshot_date if r.source == 'db' else 'live, unsaved' }}</span>
+        <span class="source-tag">{{ r.snapshot_date }}</span>
       </h2>
       <div class="meta">{{ r.address }} &middot; {{ "Open now" if r.is_open else "Closed" }}</div>
       <div class="stats">
@@ -516,49 +506,63 @@ def dashboard():
     )
 
 
+CSV_HEADER = [
+    "shop",
+    "category",
+    "product",
+    "price",
+    "full_price",
+    "pct_off_full_price",
+    "30_day_low_price",
+    "pct_below_30_day_low",
+    "verified_real_deal",
+    "snapshot_date",
+]
+
+
 @app.route("/download/sales.csv")
 def download_sales_csv():
     shop_id = request.args.get("shop_id", type=int)
-    session = SessionLocal()
-    try:
-        rows = get_all_sales(session, SHOP_LABELS, shop_id=shop_id)
-    finally:
-        session.close()
 
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(
-        [
-            "shop",
-            "category",
-            "product",
-            "price",
-            "full_price",
-            "pct_off_full_price",
-            "30_day_low_price",
-            "pct_below_30_day_low",
-            "verified_real_deal",
-            "snapshot_date",
-        ]
-    )
-    for r in rows:
-        writer.writerow(
-            [
-                r["shop_label"],
-                r["category"],
-                r["name"],
-                f'{r["price"]:.2f}',
-                f'{r["full_price"]:.2f}',
-                f'{r["pct_off_full"]:.1f}',
-                f'{r["l30d_price"]:.2f}' if r["l30d_price"] else "",
-                f'{r["pct_vs_l30d"]:.1f}' if r["pct_vs_l30d"] is not None else "",
-                "yes" if r["is_verified_deal"] else "no",
-                r["snapshot_date"],
-            ]
-        )
+    def generate():
+        # Streamed a row at a time: the full export is ~10k rows / ~3MB,
+        # and buffering all of it as one string before responding is
+        # memory this instance doesn't have to spare.
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+
+        def flush():
+            value = buf.getvalue()
+            buf.seek(0)
+            buf.truncate(0)
+            return value
+
+        writer.writerow(CSV_HEADER)
+        yield flush()
+
+        session = SessionLocal()
+        try:
+            for r in iter_all_sales(session, SHOP_LABELS, shop_id=shop_id):
+                writer.writerow(
+                    [
+                        r["shop_label"],
+                        r["category"],
+                        r["name"],
+                        f'{r["price"]:.2f}',
+                        f'{r["full_price"]:.2f}',
+                        f'{r["pct_off_full"]:.1f}',
+                        f'{r["l30d_price"]:.2f}' if r["l30d_price"] else "",
+                        f'{r["pct_vs_l30d"]:.1f}' if r["pct_vs_l30d"] is not None else "",
+                        "yes" if r["is_verified_deal"] else "no",
+                        r["snapshot_date"],
+                    ]
+                )
+                yield flush()
+        finally:
+            session.close()
 
     return Response(
-        buf.getvalue(),
+        generate(),
         mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=masoutis_sale_cases.csv"},
     )
@@ -588,48 +592,12 @@ def compare():
     return render_template_string(COMPARE_TEMPLATE, groups=groups, shop_nav=SHOPS)
 
 
-@app.route("/ingest", methods=["POST"])
-def trigger_ingest():
-    """Runs the daily snapshot fetch. Called by the scheduled GitHub
-    Actions workflow (Render's free tier has no free cron job type), so
-    it's guarded by a shared secret rather than being open to the world.
-    """
-    provided = request.headers.get("X-Ingest-Secret", "")
-    if not INGEST_SECRET or not hmac.compare_digest(provided, INGEST_SECRET):
-        abort(403)
-
-    from ingest import run_ingestion  # imported lazily: pulls in fetch/DB deps only when needed
-
-    summary = run_ingestion()
-    return jsonify(summary)
-
-
-@app.route("/notify/bugs", methods=["POST"])
-def notify_bugs():
-    """Emails a digest of every bug (zero-price, placeholder 30-day-low)
-    currently found across all tracked shops. Manually triggered only --
-    see .github/workflows/notify-bugs.yml -- guarded by the same shared
-    secret as /ingest.
-    """
-    provided = request.headers.get("X-Ingest-Secret", "")
-    if not INGEST_SECRET or not hmac.compare_digest(provided, INGEST_SECRET):
-        abort(403)
-
-    results = get_all_shop_views()
-    bugs_by_shop = [
-        {"label": r["label"], "zero_price": r["zero_price_bugs"], "placeholder": r["placeholder_bugs"]}
-        for r in results
-        if r["ok"]
-    ]
-
-    from notify import send_bug_email  # imported lazily: pulls in smtplib config only when needed
-
-    try:
-        summary = send_bug_email(bugs_by_shop)
-    except Exception as exc:  # noqa: BLE001
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-    return jsonify({"ok": True, **summary})
+# NOTE: ingestion and the bug-report email deliberately do NOT live here
+# as HTTP endpoints any more. Both need to hold whole shop catalogs in
+# memory, which repeatedly OOM-killed this 512MB service. They now run as
+# plain scripts on GitHub Actions runners (see .github/workflows/), which
+# have gigabytes of RAM and connect straight to the database. This web
+# service stays read-only and small.
 
 
 @app.route("/healthz")

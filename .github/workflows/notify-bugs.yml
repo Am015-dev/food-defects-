@@ -1,14 +1,29 @@
 name: Send bug report email
 
+# Manual only -- no schedule. Reads the latest stored bugs from the
+# database and emails a digest. Runs on a GitHub runner rather than the
+# web service, same reasoning as the ingest workflow.
+
 on:
-  workflow_dispatch: {}  # manual only -- no schedule
+  workflow_dispatch: {}
 
 jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - name: Call the dashboard's /notify/bugs endpoint
-        run: |
-          curl -sS -X POST "${{ secrets.DASHBOARD_URL }}/notify/bugs" \
-            -H "X-Ingest-Secret: ${{ secrets.INGEST_SECRET }}" \
-            --fail --max-time 60
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Email the bug digest
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
+        run: python notify.py

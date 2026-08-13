@@ -88,3 +88,54 @@ def send_bug_email(bugs_by_shop):
         "zero_price_count": total_zero,
         "placeholder_count": total_placeholder,
     }
+
+
+def collect_bugs_by_shop():
+    """Read the latest stored bugs for every tracked shop, straight from
+    the database (only the flagged rows, not whole catalogs)."""
+    from db import SessionLocal
+    from queries import get_flagged_items, get_latest_snapshot
+    from shops import SHOPS
+
+    session = SessionLocal()
+    try:
+        bugs_by_shop = []
+        for shop in SHOPS:
+            snapshot = get_latest_snapshot(session, shop["id"])
+            if snapshot is None:
+                continue
+            items = get_flagged_items(session, snapshot.id)
+            bugs_by_shop.append(
+                {
+                    "label": shop["label"],
+                    "zero_price": [
+                        {"name": it.name, "category": it.category}
+                        for it in items
+                        if it.is_zero_price_bug
+                    ],
+                    "placeholder": [
+                        {"name": it.name, "category": it.category, "price": it.price}
+                        for it in items
+                        if it.is_placeholder_bug
+                    ],
+                }
+            )
+        return bugs_by_shop
+    finally:
+        session.close()
+
+
+def main():
+    bugs_by_shop = collect_bugs_by_shop()
+    if not bugs_by_shop:
+        print("No stored snapshots yet -- nothing to report. Run ingest.py first.")
+        return
+    summary = send_bug_email(bugs_by_shop)
+    print(
+        f"Sent to {summary['sent_to']}: {summary['zero_price_count']} zero-price, "
+        f"{summary['placeholder_count']} placeholder-price bugs."
+    )
+
+
+if __name__ == "__main__":
+    main()
