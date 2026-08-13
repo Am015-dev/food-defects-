@@ -37,7 +37,7 @@ def find_zero_price_bugs(items):
 
 def find_placeholder_reference_price_bugs(items, threshold=0.05):
     """Items whose 30-day-low tag is an implausible near-zero placeholder."""
-    return [it for it in items if (l := l30d_price(it)) is not None and l <= threshold]
+    return [it for it in items if (l30d := l30d_price(it)) is not None and l30d <= threshold]
 
 
 def find_verified_deep_discounts(items, min_pct=20.0):
@@ -47,17 +47,17 @@ def find_verified_deep_discounts(items, min_pct=20.0):
     so isn't a reliable like-for-like comparison."""
     results = []
     for it in items:
-        l = l30d_price(it)
+        l30d = l30d_price(it)
         price = it.get("price")
         full_price = it.get("full_price")
         tags = it.get("tags") or []
-        if not (l and price and full_price and l > 0.05 and 0 < price < l):
+        if not (l30d and price and full_price and l30d > 0.05 and 0 < price < l30d):
             continue
         if full_price <= price or "sold_by_weight" in tags:
             continue
-        pct = (l - price) / l * 100
+        pct = (l30d - price) / l30d * 100
         if pct >= min_pct:
-            results.append({"item": it, "l30d": l, "pct": pct})
+            results.append({"item": it, "l30d": l30d, "pct": pct})
     results.sort(key=lambda x: x["pct"], reverse=True)
     return results
 

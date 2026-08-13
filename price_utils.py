@@ -105,7 +105,9 @@ def normalize_price(price: float, size_info: Optional[str], normalize_to: str = 
     return None
 
 
-def format_normalized_price(normalized_price: Optional[float], unit: str = 'auto', size_info: Optional[str] = None) -> str:
+def format_normalized_price(
+    normalized_price: Optional[float], unit: str = 'auto', size_info: Optional[str] = None
+) -> str:
     """Format normalized price for display.
 
     Args:
