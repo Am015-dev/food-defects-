@@ -134,6 +134,34 @@
   {% endif %}
 </section>
 
+<section class="panel" id="drops">
+  <h2>📉 Πρόσφατες πτώσεις τιμών</h2>
+  <p class="meta">Φτήνυναν από το προηγούμενο στιγμιότυπο κάθε καταστήματος.</p>
+  {% if price_drops %}
+  <div class="table-scroll">
+    <table class="cards-mobile">
+      <thead>
+        <tr><th>Προϊόν</th><th>Κατάστημα</th><th data-sort>Τώρα</th><th>Πριν</th><th data-sort>Πτώση</th></tr>
+      </thead>
+      <tbody>
+        {% for d in price_drops %}
+        <tr>
+          <td class="td-main">{% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
+          <td data-label="Κατάστημα"><span class="item-cat">{{ d.shop_label }}</span></td>
+          <td data-label="Τώρα" class="price-now">{{ d.price|eur }}</td>
+          <td data-label="Πριν" class="price-was">{{ d.prev_price|eur }}</td>
+          <td data-label="Πτώση" class="pct">-{{ "%.0f"|format(d.drop_pct) }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="section"><a class="btn secondary" href="/drops">Όλες οι πτώσεις τιμών →</a></div>
+  {% else %}
+  <div class="empty">Καμία ακόμη -- χρειάζονται τουλάχιστον δύο στιγμιότυπα ανά κατάστημα.</div>
+  {% endif %}
+</section>
+
 <section class="panel" id="export">
   <h2>📥 Εξαγωγή</h2>
   <p class="meta">Όλα τα προϊόντα με οποιαδήποτε ένδειξη έκπτωσης, σε όλα τα καταστήματα — με το επίσημο ποσοστό και το ποσοστό έναντι της πραγματικής κατώτατης 30 ημερών.</p>

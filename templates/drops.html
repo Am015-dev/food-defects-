@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Πτώσεις τιμών — Παρατηρητήριο Τιμών{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Μεγαλύτερες πτώσεις τιμών</h1>
+  <p class="sub">Προϊόντα που φτήνυναν από το προηγούμενο στιγμιότυπο κάθε καταστήματος έως το τελευταίο.</p>
+</div>
+
+<form class="filters" method="get" action="/drops">
+  <label class="grow wide">Αναζήτηση προϊόντος
+    <input type="search" name="q" value="{{ q or '' }}" placeholder="π.χ. κρασί, οδοντόβουρτσα…">
+  </label>
+  <label>Κατάστημα
+    <select name="shop">
+      <option value="">Όλα</option>
+      {% for s in shop_nav %}
+      <option value="{{ s.id }}" {% if shop_filter == s.id %}selected{% endif %}>{{ s.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Κατηγορία
+    <select name="category">
+      <option value="">Όλες</option>
+      {% for c in categories %}
+      <option value="{{ c }}" {% if category == c %}selected{% endif %}>{{ c }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit" class="js-hide">Εφαρμογή</button>
+</form>
+
+<section class="panel">
+  <p class="meta">{{ total }} πτώσεις τιμής{% if total %} · σελίδα {{ page }} από {{ pages }}{% endif %}</p>
+  {% if rows %}
+  <div class="table-scroll">
+    <table class="cards-mobile">
+      <thead>
+        <tr><th>Προϊόν</th><th>Κατάστημα</th><th>Κατηγορία</th><th data-sort>Τώρα</th><th>Πριν</th><th data-sort>Πτώση</th></tr>
+      </thead>
+      <tbody>
+        {% for d in rows %}
+        <tr>
+          <td class="td-main">{% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
+          <td data-label="Κατάστημα"><span class="item-cat">{{ d.shop_label }}</span></td>
+          <td data-label="Κατηγορία"><span class="item-cat">{{ d.category }}</span></td>
+          <td data-label="Τώρα" class="price-now">{{ d.price|eur }}</td>
+          <td data-label="Πριν" class="price-was">{{ d.prev_price|eur }}</td>
+          <td data-label="Πτώση" class="pct">-{{ "%.0f"|format(d.drop_pct) }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <nav class="pagination" aria-label="Σελιδοποίηση">
+    {% if page > 1 %}<a href="{{ page_url(page - 1) }}">← Προηγούμενη</a>{% else %}<span class="disabled">← Προηγούμενη</span>{% endif %}
+    <span class="page-info">Σελίδα {{ page }} από {{ pages }}</span>
+    {% if page < pages %}<a href="{{ page_url(page + 1) }}">Επόμενη →</a>{% else %}<span class="disabled">Επόμενη →</span>{% endif %}
+  </nav>
+  {% else %}
+  <div class="empty">Καμία πτώση τιμής με αυτά τα φίλτρα -- χρειάζονται τουλάχιστον δύο στιγμιότυπα ανά κατάστημα.</div>
+  {% endif %}
+</section>
+
+{% endblock %}

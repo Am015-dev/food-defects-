@@ -36,6 +36,7 @@ from queries import (
     get_item_history_by_code,
     get_latest_snapshot,
     get_latest_snapshots_for_all_shops,
+    get_price_drops,
     get_product_across_shops,
     get_trend,
     iter_all_sales,
@@ -363,6 +364,7 @@ def dashboard():
         newest_fetch = (
             session.query(Snapshot.fetched_at).order_by(Snapshot.fetched_at.desc()).limit(1).first()
         )
+        price_drops = get_price_drops(session, SHOP_LABELS)[:5]
     finally:
         session.close()
 
@@ -381,6 +383,7 @@ def dashboard():
         bugs=bugs,
         bargains=bargains,
         total_deals=total_deals,
+        price_drops=price_drops,
         refresh=refresh_status(),
         trend_charts=build_counts_charts(trend_rows),
         trend_days=len(trend_rows),
@@ -534,6 +537,51 @@ def search():
         shop_filter=shop_filter,
         category=category,
         sort=sort,
+    )
+
+
+@app.route("/drops")
+def drops():
+    """Items whose price fell between a shop's previous snapshot and its
+    latest one -- the flip side of /deals, and the natural thing to
+    surface daily given the data is already collected."""
+    shop_filter = request.args.get("shop", type=int)
+    if shop_filter not in SHOP_LABELS:
+        shop_filter = None
+    category = (request.args.get("category") or "").strip() or None
+    q = (request.args.get("q") or "").strip() or None
+    page = max(1, request.args.get("page", default=1, type=int))
+    per_page = 50
+
+    session = SessionLocal()
+    try:
+        latest = get_latest_snapshots_for_all_shops(session, list(SHOP_LABELS))
+        categories = get_categories(session, [s.id for s in latest.values()])
+        all_drops = get_price_drops(session, SHOP_LABELS, shop_id=shop_filter, q=q, category=category)
+    finally:
+        session.close()
+
+    for row in all_drops:
+        comparison_info = get_price_comparison_info(
+            row["price"], row.get("size_info"), row.get("metric_unit_description")
+        )
+        row.update(comparison_info)
+
+    total = len(all_drops)
+    pages = max(1, math.ceil(total / per_page))
+    page = min(page, pages)
+    visible = all_drops[(page - 1) * per_page : page * per_page]
+
+    return render_template(
+        "drops.html",
+        rows=visible,
+        total=total,
+        page=page,
+        pages=pages,
+        categories=categories,
+        shop_filter=shop_filter,
+        category=category,
+        q=q,
     )
 
 

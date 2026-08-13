@@ -4,7 +4,8 @@ over time, and cross-shop price comparison for the same product name.
 
 from collections import defaultdict
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
+from sqlalchemy.orm import aliased
 
 from db import ItemPrice, Snapshot
 from price_utils import fold_name
@@ -17,6 +18,91 @@ def get_latest_snapshot(session, shop_id):
         .order_by(Snapshot.snapshot_date.desc())
         .first()
     )
+
+
+def get_recent_snapshot_pair(session, shop_id):
+    """A shop's two most recent snapshots, newest first. Returns
+    (newest, previous) -- previous is None if there's only one so far."""
+    snaps = (
+        session.query(Snapshot)
+        .filter_by(shop_id=shop_id)
+        .order_by(Snapshot.snapshot_date.desc())
+        .limit(2)
+        .all()
+    )
+    newest = snaps[0] if snaps else None
+    previous = snaps[1] if len(snaps) > 1 else None
+    return newest, previous
+
+
+def get_price_drops(session, shop_labels_by_id, shop_id=None, q=None, category=None):
+    """Items whose price fell between a shop's previous snapshot and its
+    latest one, matched by e-food's stable item code (item_id is only
+    unique within one shop's own catalog and can be reused for an
+    unrelated product the next day; code is the one thing that reliably
+    identifies "the same listing" across two days). One small self-join
+    per shop, narrowed to exactly two snapshot_ids each time, rather than
+    a full-catalog scan -- shops that don't have two snapshots yet are
+    skipped, not treated as an error.
+
+    Returns every drop found (not just a top-N slice) so the /drops page
+    can filter and paginate; the dashboard just takes the first few.
+    """
+    ids = [shop_id] if shop_id is not None else list(shop_labels_by_id)
+    results = []
+    for sid in ids:
+        newest, previous = get_recent_snapshot_pair(session, sid)
+        if newest is None or previous is None:
+            continue
+
+        Yesterday = aliased(ItemPrice)
+        query = (
+            session.query(
+                ItemPrice.name,
+                ItemPrice.category,
+                ItemPrice.code,
+                ItemPrice.price,
+                Yesterday.price,
+                ItemPrice.size_info,
+                ItemPrice.metric_unit_description,
+            )
+            .join(
+                Yesterday,
+                and_(Yesterday.code == ItemPrice.code, Yesterday.snapshot_id == previous.id),
+            )
+            .filter(
+                ItemPrice.snapshot_id == newest.id,
+                ItemPrice.code.isnot(None),
+                ItemPrice.price > 0,
+                Yesterday.price > 0,
+                ItemPrice.price < Yesterday.price,
+            )
+        )
+        if category:
+            query = query.filter(ItemPrice.category.ilike(f"{category}%"))
+        if q:
+            query = query.filter(ItemPrice.name_fold.ilike(f"%{fold_name(q)}%"))
+
+        label = shop_labels_by_id[sid]
+        for name, cat, code, price, prev_price, size_info, mud in query.all():
+            results.append(
+                {
+                    "shop_id": sid,
+                    "shop_label": label,
+                    "name": name,
+                    "category": cat,
+                    "code": code,
+                    "price": price,
+                    "prev_price": prev_price,
+                    "drop_pct": (prev_price - price) / prev_price * 100,
+                    "size_info": size_info,
+                    "metric_unit_description": mud,
+                    "snapshot_date": newest.snapshot_date,
+                }
+            )
+
+    results.sort(key=lambda r: r["drop_pct"], reverse=True)
+    return results
 
 
 def get_product_across_shops(session, product_name, shop_labels, exclude_shop_id=None):

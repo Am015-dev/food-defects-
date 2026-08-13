@@ -101,6 +101,36 @@ def seeded():
     return {"shop_a": SHOP_A, "shop_b": SHOP_B}
 
 
+DROP_PRODUCT = "Ελαιόλαδο Δοκιμής"
+STEADY_PRODUCT = "Σταθερό Προϊόν"
+
+
+@pytest.fixture
+def seeded_with_drop():
+    """Two consecutive snapshots for shop A: one product's price fell,
+    another's stayed the same -- for /drops and the dashboard section."""
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-12",
+            _catalog([_item(1, DROP_PRODUCT, 10.0), _item(2, STEADY_PRODUCT, 2.0)]),
+        )
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog([_item(1, DROP_PRODUCT, 7.5), _item(2, STEADY_PRODUCT, 2.0)]),
+        )
+        session.commit()
+    finally:
+        session.close()
+    return {"shop_a": SHOP_A}
+
+
 def test_healthz(client):
     resp = client.get("/healthz")
     assert resp.status_code == 200
@@ -224,6 +254,45 @@ def test_search_finds_product_across_shops(client, seeded):
     body = resp.get_data(as_text=True)
     assert SHOP_A_LABEL in body
     assert SHOP_B_LABEL in body
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"q": DROP_PRODUCT},
+        {"shop": str(SHOP_A)},
+        {"category": "Τρόφιμα"},
+        {"page": "2"},
+    ],
+)
+def test_drops_filters(client, seeded_with_drop, params):
+    resp = client.get("/drops", query_string=params)
+    assert resp.status_code == 200
+
+
+def test_drops_finds_the_drop_but_not_the_steady_price(client, seeded_with_drop):
+    resp = client.get("/drops")
+    body = resp.get_data(as_text=True)
+    assert DROP_PRODUCT in body
+    assert STEADY_PRODUCT not in body
+    assert "-25%" in body  # (10.0 - 7.5) / 10.0 * 100
+
+
+def test_drops_empty_without_two_snapshots(client, seeded):
+    # `seeded` only stores one snapshot per shop -- no prior day to diff
+    # against, so there should be nothing to show, not an error.
+    resp = client.get("/drops")
+    assert resp.status_code == 200
+    assert "Καμία πτώση" in resp.get_data(as_text=True)
+
+
+def test_dashboard_shows_price_drops(client, seeded_with_drop):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert DROP_PRODUCT in body
+    assert STEADY_PRODUCT not in body
 
 
 def test_history_known_shop(client, seeded):
