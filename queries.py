@@ -4,7 +4,7 @@ over time, and cross-shop price comparison for the same product name.
 
 from collections import defaultdict
 
-from sqlalchemy import func
+from sqlalchemy import or_
 
 from db import ItemPrice, Snapshot
 
@@ -19,7 +19,29 @@ def get_latest_snapshot(session, shop_id):
 
 
 def get_snapshot_items(session, snapshot_id):
+    """Every item in a snapshot. Expensive for a big catalog (thousands of
+    rows) -- prefer get_flagged_items or a filtered query when only a
+    subset is actually needed."""
     return session.query(ItemPrice).filter_by(snapshot_id=snapshot_id).all()
+
+
+def get_flagged_items(session, snapshot_id):
+    """Only the items worth showing on the dashboard: bugs and verified
+    deals. A tiny fraction of a snapshot's rows, unlike get_snapshot_items
+    -- this is what keeps loading 12 shops' worth of data from ballooning
+    into tens of thousands of ORM objects for one page render."""
+    return (
+        session.query(ItemPrice)
+        .filter(
+            ItemPrice.snapshot_id == snapshot_id,
+            or_(
+                ItemPrice.is_zero_price_bug.is_(True),
+                ItemPrice.is_placeholder_bug.is_(True),
+                ItemPrice.is_verified_deal.is_(True),
+            ),
+        )
+        .all()
+    )
 
 
 def get_history(session, shop_id, limit=60):
@@ -125,9 +147,16 @@ def get_all_sales(session, shop_labels_by_id, shop_id=None):
     rows = []
     for sid, snap in latest.items():
         label = shop_labels_by_id[sid]
-        for it in get_snapshot_items(session, snap.id):
-            if not (it.full_price and it.price and it.full_price > it.price > 0):
-                continue
+        discounted_items = (
+            session.query(ItemPrice)
+            .filter(
+                ItemPrice.snapshot_id == snap.id,
+                ItemPrice.full_price > ItemPrice.price,
+                ItemPrice.price > 0,
+            )
+            .all()
+        )
+        for it in discounted_items:
             pct_off_full = (it.full_price - it.price) / it.full_price * 100
             pct_vs_l30d = None
             if it.l30d_price and it.l30d_price > 0:

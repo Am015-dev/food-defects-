@@ -17,9 +17,9 @@ from price_analysis import analyze
 from queries import (
     compare_across_shops,
     get_all_sales,
+    get_flagged_items,
     get_history,
     get_latest_snapshot,
-    get_snapshot_items,
 )
 from shops import SHOPS
 
@@ -38,7 +38,10 @@ INGEST_SECRET = os.environ.get("INGEST_SECRET", "")
 
 
 def view_from_snapshot(session, shop_id, label, snapshot):
-    items = get_snapshot_items(session, snapshot.id)
+    # Only the bug/deal rows -- a shop's full catalog can be 10,000+ rows,
+    # and loading all of that as ORM objects just to filter down to a
+    # handful in Python is what was pushing memory over Render's 512MB cap.
+    items = get_flagged_items(session, snapshot.id)
     return {
         "ok": True,
         "id": shop_id,
@@ -115,27 +118,29 @@ def view_from_live_fetch(shop_id, label):
     }
 
 
-def get_shop_view(session, shop_id, label):
-    snapshot = get_latest_snapshot(session, shop_id)
-    if snapshot is not None:
-        return view_from_snapshot(session, shop_id, label, snapshot)
-    return view_from_live_fetch(shop_id, label)
+def get_shop_view(shop_id, label):
+    # Each call gets its own session -- SQLAlchemy sessions aren't
+    # thread-safe, and this runs concurrently across shops.
+    session = SessionLocal()
+    try:
+        snapshot = get_latest_snapshot(session, shop_id)
+        if snapshot is not None:
+            return view_from_snapshot(session, shop_id, label, snapshot)
+        return view_from_live_fetch(shop_id, label)
+    finally:
+        session.close()
 
 
 def get_all_shop_views():
-    session = SessionLocal()
-    try:
-        results = [None] * len(SHOPS)
-        with ThreadPoolExecutor(max_workers=len(SHOPS)) as pool:
-            future_to_index = {
-                pool.submit(get_shop_view, session, shop["id"], shop["label"]): i
-                for i, shop in enumerate(SHOPS)
-            }
-            for future in as_completed(future_to_index):
-                results[future_to_index[future]] = future.result()
-        return results
-    finally:
-        session.close()
+    results = [None] * len(SHOPS)
+    with ThreadPoolExecutor(max_workers=len(SHOPS)) as pool:
+        future_to_index = {
+            pool.submit(get_shop_view, shop["id"], shop["label"]): i
+            for i, shop in enumerate(SHOPS)
+        }
+        for future in as_completed(future_to_index):
+            results[future_to_index[future]] = future.result()
+    return results
 
 
 BASE_STYLE = """
