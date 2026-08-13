@@ -3,9 +3,11 @@ storefronts on e-food.gr, backed by daily snapshots in the database
 (see ingest.py / db.py), with historical and cross-shop comparison views.
 """
 
+import hmac
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from flask import Flask, abort, render_template_string
+from flask import Flask, abort, jsonify, render_template_string, request
 
 from db import SessionLocal, init_db
 from efood_client import fetch_restaurant
@@ -17,6 +19,7 @@ app = Flask(__name__)
 init_db()
 
 SHOP_LABELS = {s["id"]: s["label"] for s in SHOPS}
+INGEST_SECRET = os.environ.get("INGEST_SECRET", "")
 
 
 def view_from_snapshot(session, shop_id, label, snapshot):
@@ -427,6 +430,22 @@ def compare():
     finally:
         session.close()
     return render_template_string(COMPARE_TEMPLATE, groups=groups, shop_nav=SHOPS)
+
+
+@app.route("/ingest", methods=["POST"])
+def trigger_ingest():
+    """Runs the daily snapshot fetch. Called by the scheduled GitHub
+    Actions workflow (Render's free tier has no free cron job type), so
+    it's guarded by a shared secret rather than being open to the world.
+    """
+    provided = request.headers.get("X-Ingest-Secret", "")
+    if not INGEST_SECRET or not hmac.compare_digest(provided, INGEST_SECRET):
+        abort(403)
+
+    from ingest import run_ingestion  # imported lazily: pulls in fetch/DB deps only when needed
+
+    summary = run_ingestion()
+    return jsonify(summary)
 
 
 @app.route("/healthz")

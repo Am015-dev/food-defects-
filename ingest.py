@@ -1,10 +1,15 @@
 """
 Daily ingestion: fetch every tracked shop and store a snapshot in the
-database. Meant to run once a day (see render.yaml's cron job). Safe to
-re-run on the same UTC day -- it replaces that day's snapshot per shop
-rather than duplicating it.
+database. Safe to call more than once on the same UTC day -- it replaces
+that day's snapshot per shop rather than duplicating it.
+
+Can be run as a CLI (`python ingest.py`) or triggered over HTTP via the
+web app's /ingest endpoint (see webapp.py), which is what the daily
+GitHub Actions workflow calls -- Render's free tier doesn't offer a free
+cron job service type, so scheduling lives in GitHub Actions instead.
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from db import ItemPrice, SessionLocal, Shop, Snapshot, init_db
@@ -19,9 +24,8 @@ from price_analysis import (
 from shops import SHOPS
 
 
-def ingest_shop(session, shop_id, label, today):
-    print(f"Fetching shop {shop_id} ({label})...")
-    data = fetch_restaurant(shop_id)
+def store_snapshot(session, shop_id, label, today, data):
+    """Persist one already-fetched shop payload as today's snapshot. Returns the item count."""
     items = load_items(data)
 
     zero_bug_ids = {it["id"] for it in find_zero_price_bugs(items)}
@@ -79,22 +83,57 @@ def ingest_shop(session, shop_id, label, today):
     ]
     session.bulk_save_objects(rows)
     session.commit()
-    print(f"  stored snapshot {snapshot.id}: {len(rows)} items")
+    return len(rows)
+
+
+def run_ingestion():
+    """Fetch every tracked shop (concurrently) and store today's snapshot
+    for each. Returns a JSON-serializable summary."""
+    init_db()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    fetched = {}
+    with ThreadPoolExecutor(max_workers=len(SHOPS)) as pool:
+        future_to_shop = {pool.submit(fetch_restaurant, shop["id"]): shop for shop in SHOPS}
+        for future in as_completed(future_to_shop):
+            shop = future_to_shop[future]
+            try:
+                fetched[shop["id"]] = future.result()
+            except Exception as exc:  # noqa: BLE001 - report per-shop, don't abort the batch
+                fetched[shop["id"]] = exc
+
+    session = SessionLocal()
+    results = []
+    try:
+        for shop in SHOPS:
+            outcome = fetched.get(shop["id"])
+            entry = {"shop_id": shop["id"], "label": shop["label"]}
+            if isinstance(outcome, Exception):
+                entry.update(ok=False, error=str(outcome))
+            else:
+                try:
+                    entry.update(
+                        ok=True,
+                        items=store_snapshot(session, shop["id"], shop["label"], today, outcome),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    session.rollback()
+                    entry.update(ok=False, error=str(exc))
+            results.append(entry)
+    finally:
+        session.close()
+
+    return {"date": today, "results": results}
 
 
 def main():
-    init_db()
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    session = SessionLocal()
-    try:
-        for shop in SHOPS:
-            try:
-                ingest_shop(session, shop["id"], shop["label"], today)
-            except Exception as exc:  # noqa: BLE001 - one shop's failure shouldn't stop the rest
-                print(f"  FAILED for shop {shop['id']} ({shop['label']}): {exc}")
-                session.rollback()
-    finally:
-        session.close()
+    summary = run_ingestion()
+    print(f"Ingestion for {summary['date']}:")
+    for r in summary["results"]:
+        if r["ok"]:
+            print(f"  {r['label']}: stored {r['items']} items")
+        else:
+            print(f"  FAILED for {r['label']}: {r['error']}")
 
 
 if __name__ == "__main__":

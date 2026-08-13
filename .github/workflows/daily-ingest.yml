@@ -1,0 +1,16 @@
+name: Daily catalog ingest
+
+on:
+  schedule:
+    - cron: "0 5 * * *"  # 05:00 UTC daily
+  workflow_dispatch: {}  # allows manually triggering a run from the Actions tab
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call the dashboard's /ingest endpoint
+        run: |
+          curl -sS -X POST "${{ secrets.DASHBOARD_URL }}/ingest" \
+            -H "X-Ingest-Secret: ${{ secrets.INGEST_SECRET }}" \
+            --fail --max-time 180
