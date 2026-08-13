@@ -23,6 +23,8 @@ from price_analysis import (
 )
 from shops import SHOPS
 
+MAX_CONCURRENCY = 2  # how many shops to fetch+store at once
+
 
 def store_snapshot(session, shop_id, label, today, data):
     """Persist one already-fetched shop payload as today's snapshot. Returns the item count."""
@@ -86,42 +88,44 @@ def store_snapshot(session, shop_id, label, today, data):
     return len(rows)
 
 
+def fetch_and_store_shop(shop_id, label, today):
+    """Fetch one shop and store it immediately, in the same worker, so its
+    raw payload (a shop's full catalog can be ~15MB on the wire, several
+    times that as parsed Python dicts) doesn't have to stick around in
+    memory alongside every other shop's. Each worker gets its own DB
+    session -- sessions aren't thread-safe."""
+    try:
+        data = fetch_restaurant(shop_id)
+    except Exception as exc:  # noqa: BLE001
+        return {"shop_id": shop_id, "label": label, "ok": False, "error": str(exc)}
+
+    session = SessionLocal()
+    try:
+        items = store_snapshot(session, shop_id, label, today, data)
+        return {"shop_id": shop_id, "label": label, "ok": True, "items": items}
+    except Exception as exc:  # noqa: BLE001
+        session.rollback()
+        return {"shop_id": shop_id, "label": label, "ok": False, "error": str(exc)}
+    finally:
+        session.close()
+
+
 def run_ingestion():
-    """Fetch every tracked shop (concurrently) and store today's snapshot
-    for each. Returns a JSON-serializable summary."""
+    """Fetch and store every tracked shop, with bounded concurrency so
+    only a handful of shops' raw catalogs are ever in memory at once.
+    Fetching all of them upfront -- even before writing any to the
+    database -- was pushing the app well past Render's 512MB limit."""
     init_db()
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    fetched = {}
-    with ThreadPoolExecutor(max_workers=len(SHOPS)) as pool:
-        future_to_shop = {pool.submit(fetch_restaurant, shop["id"]): shop for shop in SHOPS}
-        for future in as_completed(future_to_shop):
-            shop = future_to_shop[future]
-            try:
-                fetched[shop["id"]] = future.result()
-            except Exception as exc:  # noqa: BLE001 - report per-shop, don't abort the batch
-                fetched[shop["id"]] = exc
-
-    session = SessionLocal()
-    results = []
-    try:
-        for shop in SHOPS:
-            outcome = fetched.get(shop["id"])
-            entry = {"shop_id": shop["id"], "label": shop["label"]}
-            if isinstance(outcome, Exception):
-                entry.update(ok=False, error=str(outcome))
-            else:
-                try:
-                    entry.update(
-                        ok=True,
-                        items=store_snapshot(session, shop["id"], shop["label"], today, outcome),
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    session.rollback()
-                    entry.update(ok=False, error=str(exc))
-            results.append(entry)
-    finally:
-        session.close()
+    results = [None] * len(SHOPS)
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENCY) as pool:
+        future_to_index = {
+            pool.submit(fetch_and_store_shop, shop["id"], shop["label"], today): i
+            for i, shop in enumerate(SHOPS)
+        }
+        for future in as_completed(future_to_index):
+            results[future_to_index[future]] = future.result()
 
     return {"date": today, "results": results}
 
