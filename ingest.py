@@ -139,6 +139,15 @@ def run_ingestion():
         for future in as_completed(future_to_index):
             results[future_to_index[future]] = future.result()
 
+    try:
+        from retention import prune_old_item_prices  # lazy: keeps CLI import light
+
+        pruned = prune_old_item_prices()
+        if pruned:
+            print(f"retention: deleted {pruned} old item_prices row(s)")
+    except Exception as exc:  # noqa: BLE001 - a pruning failure shouldn't fail ingestion
+        print(f"retention: pruning failed, will retry next run: {exc}")
+
     return {"date": today, "results": results}
 
 

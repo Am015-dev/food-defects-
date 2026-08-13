@@ -72,6 +72,19 @@ service + one free Postgres database. Scheduling lives in GitHub Actions
 (`daily-ingest.yml`, 05:00 UTC) since Render's free tier has no cron job
 service type.
 
+**Keeping the schedule alive**: GitHub disables a scheduled workflow
+automatically after 60 days with no repository activity (any commit or
+manual `workflow_dispatch` run resets that clock). If the daily ingest
+ever seems to have stopped, check the Actions tab first -- it may just
+need a manual re-enable, not a code fix.
+
+**Backups**: Render's free Postgres has no backups of its own, and price
+history can't be re-fetched after the fact (e-food only exposes today's
+prices). `daily-ingest.yml` runs a `pg_dump` after every successful
+ingest and keeps it as a 30-day GitHub Actions artifact. Old per-item
+rows are also pruned after 90 days (`retention.py`) to stay within the
+free tier's 1GB limit; the small per-day summary rows are kept forever.
+
 ## Adding a shop
 
 Edit `shops.py`: add `{"id": ..., "label": ..., "slug": ...}`. The `id`

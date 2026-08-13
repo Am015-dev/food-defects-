@@ -26,3 +26,33 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python ingest.py
+
+      - name: Email on failure
+        if: failure()
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
+        run: python notify.py --ingest-failed
+
+      # Price history is the one thing here that can't be re-fetched --
+      # e-food doesn't expose yesterday's prices, only today's. Render's
+      # free Postgres has no backups of its own, so dump the database
+      # after every successful ingest and keep it as a workflow artifact.
+      - name: Install postgresql-client
+        if: success()
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Dump database
+        if: success()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pg_dump "$DATABASE_URL" --format=custom --file=food_defects_backup.dump
+
+      - name: Upload database backup
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: food-defects-db-backup
+          path: food_defects_backup.dump
+          retention-days: 30

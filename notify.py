@@ -90,6 +90,47 @@ def send_bug_email(bugs_by_shop):
     }
 
 
+def send_plain_email(subject, body_text):
+    """Send a bare text-only email. Used for operational alerts (e.g. a
+    failed nightly ingest) rather than the bug digest."""
+    if not (SMTP_USER and SMTP_PASSWORD and NOTIFY_EMAIL_TO):
+        raise RuntimeError(
+            "Email isn't configured: set the SMTP_USER, SMTP_PASSWORD, and "
+            "NOTIFY_EMAIL_TO environment variables."
+        )
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = SMTP_USER
+    msg["To"] = NOTIFY_EMAIL_TO
+    msg.attach(MIMEText(body_text, "plain"))
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        server.sendmail(SMTP_USER, [NOTIFY_EMAIL_TO], msg.as_string())
+
+
+def notify_ingest_failure():
+    """Called from daily-ingest.yml when the ingest step fails, so a
+    broken nightly run shows up in an inbox instead of only in a GitHub
+    Actions history nobody's watching. Never raises -- if SMTP isn't
+    configured, it just says so and lets the workflow finish."""
+    run_url = (
+        f"{os.environ.get('GITHUB_SERVER_URL', '')}/"
+        f"{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/"
+        f"{os.environ.get('GITHUB_RUN_ID', '')}"
+    )
+    try:
+        send_plain_email(
+            "food-defects-: daily ingest failed",
+            f"The daily-ingest GitHub Actions workflow failed.\n\nRun: {run_url}",
+        )
+        print("notify: sent ingest-failure email")
+    except RuntimeError as exc:
+        print(f"notify: could not send ingest-failure email: {exc}")
+
+
 def collect_bugs_by_shop():
     """Read the latest stored bugs for every tracked shop, straight from
     the database (only the flagged rows, not whole catalogs)."""
@@ -126,6 +167,12 @@ def collect_bugs_by_shop():
 
 
 def main():
+    import sys
+
+    if "--ingest-failed" in sys.argv:
+        notify_ingest_failure()
+        return
+
     bugs_by_shop = collect_bugs_by_shop()
     if not bugs_by_shop:
         print("No stored snapshots yet -- nothing to report. Run ingest.py first.")
