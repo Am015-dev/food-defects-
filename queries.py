@@ -5,7 +5,7 @@ over time, and cross-shop price comparison for the same product name.
 import math
 from collections import defaultdict
 
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, func, literal, literal_column, or_
 from sqlalchemy.orm import aliased
 
 from db import ItemPrice, Snapshot
@@ -36,74 +36,100 @@ def get_recent_snapshot_pair(session, shop_id):
     return newest, previous
 
 
-def get_price_drops(session, shop_labels_by_id, shop_id=None, q=None, category=None):
-    """Items whose price fell between a shop's previous snapshot and its
-    latest one, matched by e-food's stable item code (item_id is only
-    unique within one shop's own catalog and can be reused for an
-    unrelated product the next day; code is the one thing that reliably
-    identifies "the same listing" across two days). One small self-join
-    per shop, narrowed to exactly two snapshot_ids each time, rather than
-    a full-catalog scan -- shops that don't have two snapshots yet are
-    skipped, not treated as an error.
+def _shop_price_drops_query(session, sid, newest, previous, q=None, category=None):
+    """One shop's self-join between its two most recent snapshots,
+    matched by e-food's stable item code (item_id is only unique within
+    one shop's own catalog and can be reused for an unrelated product
+    the next day; code is the one thing that reliably identifies "the
+    same listing" across two days). drop_pct is computed in SQL so the
+    combined multi-shop query (see get_price_drops) can ORDER BY it
+    directly instead of sorting in Python."""
+    Yesterday = aliased(ItemPrice)
+    drop_pct = (Yesterday.price - ItemPrice.price) / Yesterday.price * 100
+    query = (
+        session.query(
+            ItemPrice.name.label("name"),
+            ItemPrice.category.label("category"),
+            ItemPrice.code.label("code"),
+            ItemPrice.price.label("price"),
+            Yesterday.price.label("prev_price"),
+            ItemPrice.size_info.label("size_info"),
+            ItemPrice.metric_unit_description.label("metric_unit_description"),
+            literal(sid).label("shop_id"),
+            literal(newest.snapshot_date).label("snapshot_date"),
+            drop_pct.label("drop_pct"),
+        )
+        .join(
+            Yesterday,
+            and_(Yesterday.code == ItemPrice.code, Yesterday.snapshot_id == previous.id),
+        )
+        .filter(
+            ItemPrice.snapshot_id == newest.id,
+            ItemPrice.code.isnot(None),
+            ItemPrice.price > 0,
+            Yesterday.price > 0,
+            ItemPrice.price < Yesterday.price,
+        )
+    )
+    if category:
+        query = query.filter(ItemPrice.category.ilike(f"{category}%"))
+    if q:
+        query = query.filter(ItemPrice.name_fold.ilike(f"%{fold_name(q)}%"))
+    return query
 
-    Returns every drop found (not just a top-N slice) so the /drops page
-    can filter and paginate; the dashboard just takes the first few.
+
+def get_price_drops(session, shop_labels_by_id, shop_id=None, q=None, category=None, page=1, per_page=50):
+    """Items whose price fell between a shop's previous snapshot and its
+    latest one. Each shop's self-join (see _shop_price_drops_query) is
+    combined into one SQL UNION ALL so sorting, counting, and
+    OFFSET/LIMIT pagination all happen in the database -- not by pulling
+    every drop across every shop into Python first. Shops without two
+    snapshots yet are skipped, not treated as an error.
+
+    Returns (rows, total_count), same convention as get_deals_page /
+    search_products.
     """
     ids = [shop_id] if shop_id is not None else list(shop_labels_by_id)
-    results = []
+    per_shop_queries = []
     for sid in ids:
         newest, previous = get_recent_snapshot_pair(session, sid)
         if newest is None or previous is None:
             continue
-
-        Yesterday = aliased(ItemPrice)
-        query = (
-            session.query(
-                ItemPrice.name,
-                ItemPrice.category,
-                ItemPrice.code,
-                ItemPrice.price,
-                Yesterday.price,
-                ItemPrice.size_info,
-                ItemPrice.metric_unit_description,
-            )
-            .join(
-                Yesterday,
-                and_(Yesterday.code == ItemPrice.code, Yesterday.snapshot_id == previous.id),
-            )
-            .filter(
-                ItemPrice.snapshot_id == newest.id,
-                ItemPrice.code.isnot(None),
-                ItemPrice.price > 0,
-                Yesterday.price > 0,
-                ItemPrice.price < Yesterday.price,
-            )
+        per_shop_queries.append(
+            _shop_price_drops_query(session, sid, newest, previous, q=q, category=category)
         )
-        if category:
-            query = query.filter(ItemPrice.category.ilike(f"{category}%"))
-        if q:
-            query = query.filter(ItemPrice.name_fold.ilike(f"%{fold_name(q)}%"))
 
-        label = shop_labels_by_id[sid]
-        for name, cat, code, price, prev_price, size_info, mud in query.all():
-            results.append(
-                {
-                    "shop_id": sid,
-                    "shop_label": label,
-                    "name": name,
-                    "category": cat,
-                    "code": code,
-                    "price": price,
-                    "prev_price": prev_price,
-                    "drop_pct": (prev_price - price) / prev_price * 100,
-                    "size_info": size_info,
-                    "metric_unit_description": mud,
-                    "snapshot_date": newest.snapshot_date,
-                }
-            )
+    if not per_shop_queries:
+        return [], 0
 
-    results.sort(key=lambda r: r["drop_pct"], reverse=True)
-    return results
+    combined = (
+        per_shop_queries[0].union_all(*per_shop_queries[1:])
+        if len(per_shop_queries) > 1
+        else per_shop_queries[0]
+    )
+    total = combined.count()
+
+    combined = combined.order_by(literal_column("drop_pct").desc())
+    last_page = max(1, math.ceil(total / per_page))
+    page = min(max(1, page), last_page)
+    rows = combined.offset((page - 1) * per_page).limit(per_page).all()
+
+    return [
+        {
+            "shop_id": row_shop_id,
+            "shop_label": shop_labels_by_id[row_shop_id],
+            "name": name,
+            "category": cat,
+            "code": code,
+            "price": price,
+            "prev_price": prev_price,
+            "drop_pct": drop_pct,
+            "size_info": size_info,
+            "metric_unit_description": mud,
+            "snapshot_date": snapshot_date,
+        }
+        for name, cat, code, price, prev_price, size_info, mud, row_shop_id, snapshot_date, drop_pct in rows
+    ], total
 
 
 def get_product_across_shops(session, product_name, shop_labels, exclude_shop_id=None):

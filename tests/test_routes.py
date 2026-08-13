@@ -342,6 +342,50 @@ def test_drops_empty_without_two_snapshots(client, seeded):
     assert "Καμία πτώση" in resp.get_data(as_text=True)
 
 
+def test_drops_paginates_across_the_50_per_page_boundary(client):
+    # Regression: get_price_drops used to pull every drop across every
+    # shop into Python before sorting/slicing -- this proves pagination
+    # now genuinely happens in SQL: 54 real drops, page size 50, so page
+    # 1 and page 2 must show disjoint, non-overlapping sets of items.
+    import re
+
+    session = SessionLocal()
+    try:
+        yesterday = [_item(i, f"Item {i:03d}", 10.0) for i in range(60)]
+        today = [_item(i, f"Item {i:03d}", 10.0 - (i % 10) * 0.1) for i in range(60)]
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-12", _catalog(yesterday))
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-13", _catalog(today))
+        session.commit()
+    finally:
+        session.close()
+
+    page1_body = client.get("/drops", query_string={"page": "1"}).get_data(as_text=True)
+    page2_body = client.get("/drops", query_string={"page": "2"}).get_data(as_text=True)
+    page1_items = set(re.findall(r"Item \d{3}", page1_body))
+    page2_items = set(re.findall(r"Item \d{3}", page2_body))
+
+    assert len(page1_items) == 50
+    assert len(page2_items) == 4  # 60 items, 6 unchanged (i % 10 == 0), 54 real drops
+    assert page1_items.isdisjoint(page2_items)
+
+
+def test_dashboard_price_drops_teaser_is_capped_at_5(client):
+    session = SessionLocal()
+    try:
+        yesterday = [_item(i, f"Item {i:03d}", 10.0) for i in range(20)]
+        today = [_item(i, f"Item {i:03d}", 5.0) for i in range(20)]  # all 20 dropped
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-12", _catalog(yesterday))
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-13", _catalog(today))
+        session.commit()
+    finally:
+        session.close()
+
+    import re
+
+    body = client.get("/").get_data(as_text=True)
+    assert len(set(re.findall(r"Item \d{3}", body))) == 5
+
+
 def test_dashboard_shows_price_drops(client, seeded_with_drop):
     resp = client.get("/")
     assert resp.status_code == 200

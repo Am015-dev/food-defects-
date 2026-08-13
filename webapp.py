@@ -379,7 +379,7 @@ def dashboard():
             .group_by(Snapshot.shop_id)
             .all()
         )
-        price_drops = get_price_drops(session, SHOP_LABELS)[:5]
+        price_drops, _ = get_price_drops(session, SHOP_LABELS, page=1, per_page=5)
     finally:
         session.close()
 
@@ -605,26 +605,24 @@ def drops():
     try:
         latest = get_latest_snapshots_for_all_shops(session, list(SHOP_LABELS))
         categories = get_categories(session, [s.id for s in latest.values()])
-        all_drops = get_price_drops(session, SHOP_LABELS, shop_id=shop_filter, q=q, category=category)
+        rows, total = get_price_drops(
+            session, SHOP_LABELS, shop_id=shop_filter, q=q, category=category, page=page, per_page=per_page
+        )
     finally:
         session.close()
 
-    for row in all_drops:
+    for row in rows:
         comparison_info = get_price_comparison_info(
             row["price"], row.get("size_info"), row.get("metric_unit_description")
         )
         row.update(comparison_info)
 
-    total = len(all_drops)
     pages = max(1, math.ceil(total / per_page))
-    page = min(page, pages)
-    visible = all_drops[(page - 1) * per_page : page * per_page]
-
     return render_template(
         "drops.html",
-        rows=visible,
+        rows=rows,
         total=total,
-        page=page,
+        page=min(page, pages),
         pages=pages,
         categories=categories,
         shop_filter=shop_filter,
