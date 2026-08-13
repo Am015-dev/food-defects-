@@ -24,7 +24,14 @@ from queries import (
 from shops import SHOPS
 
 app = Flask(__name__)
-init_db()
+try:
+    init_db()
+except Exception as exc:  # noqa: BLE001
+    # Don't let a still-unreachable database at boot time take the whole
+    # process down -- /healthz should still come up, and DB-backed routes
+    # will surface their own errors (or fall back to a live fetch, for
+    # the per-shop dashboard cards) once the database is reachable.
+    print(f"WARNING: init_db() failed at startup, continuing anyway: {exc}")
 
 SHOP_LABELS = {s["id"]: s["label"] for s in SHOPS}
 INGEST_SECRET = os.environ.get("INGEST_SECRET", "")

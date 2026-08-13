@@ -4,6 +4,7 @@ DATABASE_URL) and falling back to a local SQLite file for development.
 """
 
 import os
+import time
 
 from sqlalchemy import (
     Boolean,
@@ -83,5 +84,17 @@ class ItemPrice(Base):
     snapshot = relationship("Snapshot", back_populates="item_prices")
 
 
-def init_db():
-    Base.metadata.create_all(engine)
+def init_db(retries=5, delay_seconds=2):
+    """Create tables if they don't exist yet. Retries briefly: on a fresh
+    deploy the web service can start importing before a just-provisioned
+    database is actually ready to accept connections."""
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            Base.metadata.create_all(engine)
+            return
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt < retries - 1:
+                time.sleep(delay_seconds)
+    raise last_exc
