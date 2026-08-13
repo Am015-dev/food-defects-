@@ -650,13 +650,18 @@ def verify_item(shop_id, code):
         # Get this product's price across all shops for comparison
         shop_comparison = []
         if stored is not None:
-            shop_comparison = get_product_across_shops(
-                session, stored.name, SHOP_LABELS, exclude_shop_id=shop_id
-            )
-            # Add normalized price info to each comparison row
-            for row in shop_comparison:
-                comparison_info = get_price_comparison_info(row["price"], row.get("size_info"))
-                row.update(comparison_info)
+            try:
+                shop_comparison = get_product_across_shops(
+                    session, stored.name, SHOP_LABELS, exclude_shop_id=shop_id
+                )
+                # Add normalized price info to each comparison row
+                for row in shop_comparison:
+                    comparison_info = get_price_comparison_info(row["price"], row.get("size_info"))
+                    row.update(comparison_info)
+            except Exception as exc:  # noqa: BLE001
+                # If comparison fails, just continue without it
+                print(f"WARNING: Failed to get product comparison: {exc}")
+                shop_comparison = []
     finally:
         session.close()
 
