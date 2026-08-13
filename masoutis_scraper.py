@@ -1,107 +1,79 @@
 """
-Personal price-tracking scraper for a single Masoutis storefront on e-food.gr.
+Personal price-tracking fetcher for a single Masoutis storefront on e-food.gr.
 
 Note: e-food.gr's Terms of Service likely restrict automated access. This is
-intended for low-frequency, personal, non-commercial use against one store
-page -- not for bulk/repeated crawling. Respect the site's robots.txt and
-rate limits, and stop using this if e-food asks you to.
+intended for low-frequency, personal, non-commercial use against one store,
+not bulk/repeated crawling. Respect rate limits and stop using this if
+e-food asks you to.
 
-The CSS selectors below are placeholders. e-food renders its supermarket
-catalog with auto-generated class names that change over time, so you must
-inspect the live page (right-click a product -> Inspect) and update
-PRODUCT_CARD_SELECTOR / TITLE_SELECTOR / PRICE_SELECTOR before this will
-find anything.
+This calls e-food's own consumer app API directly (the same one their
+website's JS uses) instead of driving a browser: GET
+/api/v1/restaurants/{restaurant_id} on api.e-food.gr returns the full,
+structured catalog -- categories, items, names, and prices -- as JSON,
+with no login required for browsing. That avoids needing to render and
+scrape the public web page's JS-heavy, Cloudflare-protected DOM entirely.
+
+Endpoint shape and headers confirmed against the unofficial efood-mcp
+project (https://github.com/DENNISDGR/efood-mcp), which documents this as
+a public, unauthenticated endpoint.
 """
 
-import asyncio
+import json
 from pathlib import Path
 
-from playwright.async_api import async_playwright
+import requests
 
-URL = "https://www.e-food.gr/delivery/xalandri/masoytis-9038526"
+RESTAURANT_ID = 9038526  # from the e-food.gr URL: masoytis-9038526
+API_URL = f"https://api.e-food.gr/api/v1/restaurants/{RESTAURANT_ID}"
 
-PRODUCT_CARD_SELECTOR = ".product-card"
-TITLE_SELECTOR = ".product-title"
-PRICE_SELECTOR = ".product-price"
+HEADERS = {
+    "Accept": "application/json",
+    "Accept-Language": "el-GR,el;q=0.9",
+    "User-Agent": (
+        "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
+    ),
+}
 
-DEBUG_HTML_PATH = Path(__file__).with_name("debug_page.html")
-DEBUG_SCREENSHOT_PATH = Path(__file__).with_name("debug_screenshot.png")
-
-
-async def save_debug_artifacts(page):
-    """Dump the live DOM and a screenshot so selectors can be fixed without re-running."""
-    html = await page.content()
-    DEBUG_HTML_PATH.write_text(html, encoding="utf-8")
-    await page.screenshot(path=str(DEBUG_SCREENSHOT_PATH), full_page=True)
-    print(
-        f"Saved {DEBUG_HTML_PATH.name} and {DEBUG_SCREENSHOT_PATH.name} next to this "
-        "script -- inspect them (or send them along) to fix the selectors above."
-    )
+RAW_JSON_PATH = Path(__file__).with_name("masoutis_catalog.json")
 
 
-async def autoscroll(page, step=1000, pause_ms=500, max_steps=40):
-    """Scroll down incrementally so lazy-loaded products render."""
-    last_height = 0
-    for _ in range(max_steps):
-        await page.mouse.wheel(0, step)
-        await page.wait_for_timeout(pause_ms)
-        height = await page.evaluate("document.body.scrollHeight")
-        if height == last_height:
-            break
-        last_height = height
+def fetch_catalog():
+    response = requests.get(API_URL, headers=HEADERS, timeout=20)
+    response.raise_for_status()
+    payload = response.json()
+
+    if payload.get("status") != "ok":
+        raise RuntimeError(f"API returned an error: {payload.get('message')}")
+
+    return payload["data"]
 
 
-async def crawl_masoutis():
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context(
-            viewport={"width": 1920, "height": 1080},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            ),
-            locale="el-GR",
-        )
-        page = await context.new_page()
+def main():
+    print(f"Fetching {API_URL} ...")
+    data = fetch_catalog()
 
-        print(f"Navigating to {URL}...")
-        response = await page.goto(URL, wait_until="networkidle")
+    RAW_JSON_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Saved full raw catalog to {RAW_JSON_PATH.name}\n")
 
-        if response and response.status != 200:
-            print(f"Warning: received HTTP {response.status}")
+    info = data["information"]
+    print(f"Store: {info['title']} - {info['address']['description']}")
+    print(f"Open now: {info['is_open']}\n")
 
-        print("Page loaded. Scrolling to load the full catalog...")
-        await autoscroll(page)
+    categories = data["menu"]["categories"]
+    total_items = sum(len(cat.get("items", [])) for cat in categories)
+    print(f"{len(categories)} categories, {total_items} products total.\n")
 
-        print("Looking for products...")
-        try:
-            await page.wait_for_selector(PRODUCT_CARD_SELECTOR, timeout=10000)
-            products = await page.query_selector_all(PRODUCT_CARD_SELECTOR)
-            print(f"Found {len(products)} products.\n")
-
-            if not products:
-                await save_debug_artifacts(page)
-
-            for item in products:
-                title_element = await item.query_selector(TITLE_SELECTOR)
-                price_element = await item.query_selector(PRICE_SELECTOR)
-
-                title = await title_element.inner_text() if title_element else "Unknown Item"
-                price = await price_element.inner_text() if price_element else "Unknown Price"
-
-                print(f"- {title.strip()} | {price.strip()}")
-
-        except Exception as e:
-            print(
-                "Extraction failed. e-food's DOM structure likely requires "
-                "updated selectors, or the page didn't finish loading "
-                "(e.g. a Cloudflare interstitial)."
-            )
-            print(f"Error details: {e}")
-            await save_debug_artifacts(page)
-
-        await browser.close()
+    for category in categories:
+        items = category.get("items", [])
+        if not items:
+            continue
+        print(f"== {category['name']} ({len(items)} items) ==")
+        for item in items:
+            size = f" ({item['size_info']})" if item.get("size_info") else ""
+            print(f"- {item['name']} | {item['calculated_price']}{size}")
+        print()
 
 
 if __name__ == "__main__":
-    asyncio.run(crawl_masoutis())
+    main()
