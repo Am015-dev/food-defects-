@@ -1,5 +1,5 @@
 {
-  "_note": "Cart lines observed by a human on e-food.gr and pasted in for analysis. Not fetched by the crawler. initial_price on the two Pepsi lines is taken from the earlier observed report (1.05 each); the paste itself only showed 0.00.",
+  "_note": "Cart lines exactly as pasted by a human from e-food.gr (Masoutis) for analysis. Not fetched by the crawler. Only 'name', 'price' and 'quantity_ordered' come from that paste, verbatim. No original/struck-through price was ever pasted for the two Pepsi lines -- an earlier draft of this file filled in 1.05 from an unrelated sample report.html shown at the start of the conversation, which was wrong to blend in as if observed; that field is removed here. 'id' values are synthetic record keys (no SKU was given), not observed data.",
   "data": {
     "categories": [
       {
@@ -7,8 +7,8 @@
         "items": [
           { "id": "choc-6x70",     "name": "Σοκολάτα 6x70g",                                              "price": 4.29, "quantity_ordered": 1 },
           { "id": "7up-free-15",   "name": "7UP Free 1.5l",                                               "price": 0.99, "quantity_ordered": 1 },
-          { "id": "PEP-TWIST-15",  "name": "Pepsi Twist 1.5l",           "price": 0.00, "initial_price": 1.05, "quantity_ordered": 4 },
-          { "id": "PEP-ZERO-15",   "name": "Pepsi Zero Sugar 1.5l",      "price": 0.00, "initial_price": 1.05, "quantity_ordered": 4 },
+          { "id": "PEP-TWIST-15",  "name": "Pepsi Twist 1.5l",           "price": 0.00, "quantity_ordered": 4 },
+          { "id": "PEP-ZERO-15",   "name": "Pepsi Zero Sugar 1.5l",      "price": 0.00, "quantity_ordered": 4 },
           { "id": "fanta-6x330",   "name": "Fanta Πορτοκαλάδα Χωρίς Ζάχαρη 6x330ml",                       "price": 4.86, "quantity_ordered": 1 },
           { "id": "coke-6x330-51", "name": "Coca-Cola 6x330ml 5+1",                                       "price": 4.60, "quantity_ordered": 1 },
           { "id": "voda-cu",       "name": "Vodafone CU Smart Pocket",                                    "price": -9.80, "quantity_ordered": 1 }
