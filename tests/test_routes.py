@@ -159,6 +159,7 @@ def test_dashboard_filters(client, seeded, params):
         {},
         {"min_pct": "10"},
         {"sort": "price"},
+        {"sort": "unit_price"},
         {"sort": "name"},
         {"page": "2"},
         {"page": "0"},  # should clamp to page 1, not error
@@ -191,6 +192,38 @@ def test_compare_shows_cross_shop_spread(client, seeded):
     assert COMMON_PRODUCT in body
     # Both shops' prices should appear since the spread exceeds 5%.
     assert "1,68" in body or "1,68 €" in body
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},  # no q -- should not scan the whole catalog, just render empty
+        {"q": COMMON_PRODUCT},
+        {"q": "κοινο προϊον δοκιμης"},  # unaccented/wrong-case, same regression as elsewhere
+        {"q": COMMON_PRODUCT, "sort": "unit_price"},
+        {"q": COMMON_PRODUCT, "sort": "name"},
+        {"q": COMMON_PRODUCT, "shop": str(SHOP_A)},
+        {"q": COMMON_PRODUCT, "category": "Τρόφιμα"},
+        {"q": "nothing matches this"},
+        {"q": COMMON_PRODUCT, "sort": "bogus"},  # invalid sort should fall back, not 500
+    ],
+)
+def test_search_filters(client, seeded, params):
+    resp = client.get("/search", query_string=params)
+    assert resp.status_code == 200
+
+
+def test_search_without_query_does_not_list_everything(client, seeded):
+    resp = client.get("/search")
+    body = resp.get_data(as_text=True)
+    assert COMMON_PRODUCT not in body
+
+
+def test_search_finds_product_across_shops(client, seeded):
+    resp = client.get("/search", query_string={"q": COMMON_PRODUCT})
+    body = resp.get_data(as_text=True)
+    assert SHOP_A_LABEL in body
+    assert SHOP_B_LABEL in body
 
 
 def test_history_known_shop(client, seeded):

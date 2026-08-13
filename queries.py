@@ -158,6 +158,7 @@ def get_deals_page(
         ItemPrice.price,
         ItemPrice.full_price,
         ItemPrice.deal_pct,
+        ItemPrice.unit_price,
     ).filter(
         ItemPrice.snapshot_id.in_(list(shop_by_snapshot)),
         ItemPrice.is_verified_deal.is_(True),
@@ -173,6 +174,8 @@ def get_deals_page(
 
     if sort == "price":
         query = query.order_by(ItemPrice.price.asc())
+    elif sort == "unit_price":
+        query = query.order_by(ItemPrice.unit_price.asc().nulls_last())
     elif sort == "name":
         query = query.order_by(ItemPrice.name.asc())
     else:
@@ -182,7 +185,7 @@ def get_deals_page(
     rows = query.offset((page - 1) * per_page).limit(per_page).all()
 
     results = []
-    for snapshot_id, name, cat, code, price, full_price, pct in rows:
+    for snapshot_id, name, cat, code, price, full_price, pct, unit_price in rows:
         sid, snapshot_date = shop_by_snapshot[snapshot_id]
         results.append(
             {
@@ -194,6 +197,7 @@ def get_deals_page(
                 "price": price,
                 "full_price": full_price,
                 "pct": pct,
+                "unit_price": unit_price,
                 "snapshot_date": snapshot_date,
             }
         )
@@ -255,6 +259,83 @@ def get_latest_snapshots_for_all_shops(session, shop_ids):
         if snap is not None:
             latest[shop_id] = snap
     return latest
+
+
+def search_products(
+    session,
+    shop_labels_by_id,
+    q,
+    shop_id=None,
+    category=None,
+    sort="price",
+    page=1,
+    per_page=50,
+):
+    """Search the full catalog -- not just flagged bug/deal rows -- across
+    the latest snapshot of every tracked shop. q is required: unlike a
+    dashboard that always renders the same small flagged-row set, an
+    open-ended scan of the whole catalog needs a real search term to
+    bound it, so an empty q returns nothing rather than paging through
+    the entire multi-shop inventory.
+    """
+    if not q:
+        return [], 0
+
+    ids = [shop_id] if shop_id is not None else list(shop_labels_by_id)
+    latest = get_latest_snapshots_for_all_shops(session, ids)
+    if not latest:
+        return [], 0
+    shop_by_snapshot = {snap.id: (sid, snap.snapshot_date) for sid, snap in latest.items()}
+
+    query = session.query(
+        ItemPrice.snapshot_id,
+        ItemPrice.name,
+        ItemPrice.category,
+        ItemPrice.code,
+        ItemPrice.price,
+        ItemPrice.full_price,
+        ItemPrice.size_info,
+        ItemPrice.metric_unit_description,
+        ItemPrice.unit_price,
+    ).filter(
+        ItemPrice.snapshot_id.in_(list(shop_by_snapshot)),
+        ItemPrice.price > 0,
+        ItemPrice.name_fold.ilike(f"%{fold_name(q)}%"),
+    )
+    if category:
+        query = query.filter(ItemPrice.category.ilike(f"{category}%"))
+
+    total = query.count()
+
+    if sort == "unit_price":
+        query = query.order_by(ItemPrice.unit_price.asc().nulls_last())
+    elif sort == "name":
+        query = query.order_by(ItemPrice.name.asc())
+    else:
+        query = query.order_by(ItemPrice.price.asc())
+
+    page = max(1, page)
+    rows = query.offset((page - 1) * per_page).limit(per_page).all()
+
+    results = []
+    for snapshot_id, name, cat, code, price, full_price, size_info, mud, unit_price in rows:
+        sid, snapshot_date = shop_by_snapshot[snapshot_id]
+        results.append(
+            {
+                "shop_id": sid,
+                "shop_label": shop_labels_by_id[sid],
+                "name": name,
+                "category": cat,
+                "code": code,
+                "price": price,
+                "full_price": full_price,
+                "size_info": size_info,
+                "metric_unit_description": mud,
+                "unit_price": unit_price,
+                "snapshot_date": snapshot_date,
+            }
+        )
+    return results, total
 
 
 def compare_across_shops(

@@ -14,6 +14,7 @@
     <a class="brand" href="/">🛒 Παρατηρητήριο Τιμών</a>
     <nav class="topnav" aria-label="Κύρια πλοήγηση">
       <a href="/" {% if request.path == '/' %}aria-current="page"{% endif %}>Πίνακας</a>
+      <a href="/search" {% if request.path == '/search' %}aria-current="page"{% endif %}>Αναζήτηση</a>
       <a href="/deals" {% if request.path == '/deals' %}aria-current="page"{% endif %}>Προσφορές</a>
       <a href="/compare" {% if request.path == '/compare' %}aria-current="page"{% endif %}>Σύγκριση</a>
       <a href="/download/sales.csv">CSV</a>

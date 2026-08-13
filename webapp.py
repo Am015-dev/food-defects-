@@ -39,6 +39,7 @@ from queries import (
     get_product_across_shops,
     get_trend,
     iter_all_sales,
+    search_products,
 )
 from shops import SHOP_URLS, SHOPS
 
@@ -478,6 +479,61 @@ def compare():
         q=q,
         category=category,
         min_spread=min_spread,
+    )
+
+
+@app.route("/search")
+def search():
+    """Search the FULL catalog across every shop -- unlike the dashboard
+    (flagged rows only), /deals (verified deals only), or /compare
+    (products in 2+ shops with a real spread), this is the plain "what
+    does X cost near me" lookup with nothing else filtering it out."""
+    q = (request.args.get("q") or "").strip() or None
+    shop_filter = request.args.get("shop", type=int)
+    if shop_filter not in SHOP_LABELS:
+        shop_filter = None
+    category = (request.args.get("category") or "").strip() or None
+    sort = request.args.get("sort") or "price"
+    if sort not in ("price", "unit_price", "name"):
+        sort = "price"
+    page = max(1, request.args.get("page", default=1, type=int))
+    per_page = 50
+
+    session = SessionLocal()
+    try:
+        latest = get_latest_snapshots_for_all_shops(session, list(SHOP_LABELS))
+        categories = get_categories(session, [s.id for s in latest.values()])
+        rows, total = search_products(
+            session,
+            SHOP_LABELS,
+            q,
+            shop_id=shop_filter,
+            category=category,
+            sort=sort,
+            page=page,
+            per_page=per_page,
+        )
+    finally:
+        session.close()
+
+    for row in rows:
+        comparison_info = get_price_comparison_info(
+            row["price"], row.get("size_info"), row.get("metric_unit_description")
+        )
+        row.update(comparison_info)
+
+    pages = max(1, math.ceil(total / per_page))
+    return render_template(
+        "search.html",
+        rows=rows,
+        total=total,
+        page=min(page, pages),
+        pages=pages,
+        categories=categories,
+        q=q,
+        shop_filter=shop_filter,
+        category=category,
+        sort=sort,
     )
 
 

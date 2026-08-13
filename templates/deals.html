@@ -39,6 +39,7 @@
     <select name="sort">
       <option value="pct" {% if sort == 'pct' %}selected{% endif %}>Μεγαλύτερη έκπτωση</option>
       <option value="price" {% if sort == 'price' %}selected{% endif %}>Φθηνότερα πρώτα</option>
+      <option value="unit_price" {% if sort == 'unit_price' %}selected{% endif %}>Φθηνότερα ανά μονάδα</option>
       <option value="name" {% if sort == 'name' %}selected{% endif %}>Αλφαβητικά</option>
     </select>
   </label>
