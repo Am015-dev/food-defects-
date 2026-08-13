@@ -14,6 +14,8 @@ find anything.
 """
 
 import asyncio
+from pathlib import Path
+
 from playwright.async_api import async_playwright
 
 URL = "https://www.e-food.gr/delivery/xalandri/masoytis-9038526"
@@ -21,6 +23,20 @@ URL = "https://www.e-food.gr/delivery/xalandri/masoytis-9038526"
 PRODUCT_CARD_SELECTOR = ".product-card"
 TITLE_SELECTOR = ".product-title"
 PRICE_SELECTOR = ".product-price"
+
+DEBUG_HTML_PATH = Path(__file__).with_name("debug_page.html")
+DEBUG_SCREENSHOT_PATH = Path(__file__).with_name("debug_screenshot.png")
+
+
+async def save_debug_artifacts(page):
+    """Dump the live DOM and a screenshot so selectors can be fixed without re-running."""
+    html = await page.content()
+    DEBUG_HTML_PATH.write_text(html, encoding="utf-8")
+    await page.screenshot(path=str(DEBUG_SCREENSHOT_PATH), full_page=True)
+    print(
+        f"Saved {DEBUG_HTML_PATH.name} and {DEBUG_SCREENSHOT_PATH.name} next to this "
+        "script -- inspect them (or send them along) to fix the selectors above."
+    )
 
 
 async def autoscroll(page, step=1000, pause_ms=500, max_steps=40):
@@ -63,6 +79,9 @@ async def crawl_masoutis():
             products = await page.query_selector_all(PRODUCT_CARD_SELECTOR)
             print(f"Found {len(products)} products.\n")
 
+            if not products:
+                await save_debug_artifacts(page)
+
             for item in products:
                 title_element = await item.query_selector(TITLE_SELECTOR)
                 price_element = await item.query_selector(PRICE_SELECTOR)
@@ -75,9 +94,11 @@ async def crawl_masoutis():
         except Exception as e:
             print(
                 "Extraction failed. e-food's DOM structure likely requires "
-                "updated selectors, or the page didn't finish loading."
+                "updated selectors, or the page didn't finish loading "
+                "(e.g. a Cloudflare interstitial)."
             )
             print(f"Error details: {e}")
+            await save_debug_artifacts(page)
 
         await browser.close()
 
