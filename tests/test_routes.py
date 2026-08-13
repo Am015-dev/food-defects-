@@ -143,6 +143,25 @@ def test_healthz(client):
     assert resp.get_json()["status"] == "ok"
 
 
+def test_healthz_db_failure_does_not_leak_exception_detail(client, monkeypatch):
+    # Regression: /healthz used to return str(exc) verbatim, which for a
+    # real connection failure commonly includes host/port/DSN details --
+    # unacceptable for a public, unauthenticated endpoint.
+    class _BrokenSession:
+        def execute(self, *args, **kwargs):
+            raise RuntimeError("connection to server at db.internal.example:5432 failed")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("webapp.SessionLocal", lambda: _BrokenSession())
+    resp = client.get("/healthz")
+    assert resp.status_code == 503
+    body = resp.get_json()
+    assert body == {"status": "error"}
+    assert "db.internal.example" not in resp.get_data(as_text=True)
+
+
 def test_robots_txt(client):
     resp = client.get("/robots.txt")
     assert resp.status_code == 200

@@ -101,9 +101,21 @@ need a manual re-enable, not a code fix.
 **Backups**: Render's free Postgres has no backups of its own, and price
 history can't be re-fetched after the fact (e-food only exposes today's
 prices). `daily-ingest.yml` runs a `pg_dump` after every successful
-ingest and keeps it as a 30-day GitHub Actions artifact. Old per-item
-rows are also pruned after 90 days (`retention.py`) to stay within the
-free tier's 1GB limit; the small per-day summary rows are kept forever.
+ingest, GPG-encrypts it, and keeps it as a 30-day GitHub Actions
+artifact. Requires a `BACKUP_ENCRYPTION_PASSPHRASE` secret -- GitHub
+Actions artifacts are downloadable by anyone with repo read access for
+the whole retention window (a lower bar than the `DATABASE_URL` secret
+itself), so the dump is encrypted rather than uploaded raw. To restore:
+download the artifact, then
+```
+gpg --batch --yes --decrypt --passphrase-fd 0 \
+  --output food_defects_backup.dump \
+  food_defects_backup.dump.gpg <<< "$BACKUP_ENCRYPTION_PASSPHRASE"
+pg_restore --clean --if-exists -d "$DATABASE_URL" food_defects_backup.dump
+```
+Old per-item rows are also pruned after 90 days (`retention.py`) to stay
+within the free tier's 1GB limit; the small per-day summary rows are
+kept forever.
 
 ## Adding a shop
 

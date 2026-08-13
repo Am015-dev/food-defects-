@@ -49,10 +49,26 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: pg_dump "$DATABASE_URL" --format=custom --file=food_defects_backup.dump
 
+      # GitHub Actions artifacts are downloadable by anyone with repo
+      # read access (or an actions:read token) for the whole retention
+      # window -- a materially lower bar than access to the DATABASE_URL
+      # secret itself. Encrypt the dump so a repo-read grant doesn't
+      # double as a full price-history export grant.
+      - name: Encrypt database backup
+        if: success()
+        env:
+          BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
+        run: |
+          gpg --batch --yes --symmetric --cipher-algo AES256 \
+            --passphrase-fd 0 \
+            --output food_defects_backup.dump.gpg \
+            food_defects_backup.dump <<< "$BACKUP_ENCRYPTION_PASSPHRASE"
+          rm -f food_defects_backup.dump
+
       - name: Upload database backup
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: food-defects-db-backup
-          path: food_defects_backup.dump
+          path: food_defects_backup.dump.gpg
           retention-days: 30

@@ -931,7 +931,11 @@ def healthz():
         )
         return {"status": "ok", "newest_snapshot_date": newest[0] if newest else None}
     except Exception as exc:  # noqa: BLE001
-        return {"status": "error", "detail": str(exc)}, 503
+        # Logged server-side only -- a DB connection error commonly
+        # includes host/port/DSN details that shouldn't go to whatever
+        # unauthenticated prober hits this public endpoint.
+        print(f"healthz: database probe failed: {exc}")
+        return {"status": "error"}, 503
     finally:
         session.close()
 
