@@ -1,0 +1,14 @@
+name: Send bug report email
+
+on:
+  workflow_dispatch: {}  # manual only -- no schedule
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call the dashboard's /notify/bugs endpoint
+        run: |
+          curl -sS -X POST "${{ secrets.DASHBOARD_URL }}/notify/bugs" \
+            -H "X-Ingest-Secret: ${{ secrets.INGEST_SECRET }}" \
+            --fail --max-time 60

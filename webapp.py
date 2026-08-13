@@ -592,6 +592,34 @@ def trigger_ingest():
     return jsonify(summary)
 
 
+@app.route("/notify/bugs", methods=["POST"])
+def notify_bugs():
+    """Emails a digest of every bug (zero-price, placeholder 30-day-low)
+    currently found across all tracked shops. Manually triggered only --
+    see .github/workflows/notify-bugs.yml -- guarded by the same shared
+    secret as /ingest.
+    """
+    provided = request.headers.get("X-Ingest-Secret", "")
+    if not INGEST_SECRET or not hmac.compare_digest(provided, INGEST_SECRET):
+        abort(403)
+
+    results = get_all_shop_views()
+    bugs_by_shop = [
+        {"label": r["label"], "zero_price": r["zero_price_bugs"], "placeholder": r["placeholder_bugs"]}
+        for r in results
+        if r["ok"]
+    ]
+
+    from notify import send_bug_email  # imported lazily: pulls in smtplib config only when needed
+
+    try:
+        summary = send_bug_email(bugs_by_shop)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+    return jsonify({"ok": True, **summary})
+
+
 @app.route("/healthz")
 def healthz():
     return {"status": "ok"}
