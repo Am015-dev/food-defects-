@@ -11,7 +11,6 @@ renders what a scan already recorded and never writes to the database.
 from __future__ import annotations
 
 import html
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -157,15 +156,14 @@ def main() -> None:
             total = con.execute("SELECT COUNT(*) FROM cases").fetchone()[0]
             rows = query_cases(con, status, severity)
             cards = [case_card(r, hints, sev_of) for r in rows]
-    except (sqlite3.Error, OSError, IndexError, KeyError, TypeError):
+            openrows = [r for r in rows if r["status"] == "open"]
+            risk = sum(r["value_at_risk"] for r in openrows)
+            crit = sum(1 for r in openrows if r["severity"] == "critical")
+    except Exception:  # noqa: BLE001 - a bad database must not reach the page as a traceback
         st.markdown(header(None), unsafe_allow_html=True)
         st.markdown(notice("Cases didn't load. Retry, or check the pricing service status.",
                            "failed"), unsafe_allow_html=True)
         return
-
-    openrows = [r for r in rows if r["status"] == "open"]
-    risk = sum(r["value_at_risk"] for r in openrows)
-    crit = sum(1 for r in openrows if r["severity"] == "critical")
 
     st.markdown(header(scan), unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
