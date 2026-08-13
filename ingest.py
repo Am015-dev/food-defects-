@@ -70,6 +70,7 @@ def store_snapshot(session, shop_id, label, today, data):
         ItemPrice(
             snapshot_id=snapshot.id,
             item_id=it["id"],
+            code=it.get("code"),
             name=it["name"],
             category=it["_category"],
             price=it.get("price"),

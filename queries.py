@@ -167,6 +167,7 @@ def iter_all_sales(session, shop_labels_by_id, shop_id=None):
                 ItemPrice.full_price,
                 ItemPrice.l30d_price,
                 ItemPrice.is_verified_deal,
+                ItemPrice.code,
             )
             .filter(
                 ItemPrice.snapshot_id == snap.id,
@@ -176,16 +177,18 @@ def iter_all_sales(session, shop_labels_by_id, shop_id=None):
             .all()
         )
         rows = []
-        for name, category, price, full_price, l30d, is_deal in discounted:
+        for name, category, price, full_price, l30d, is_deal, code in discounted:
             pct_off_full = (full_price - price) / full_price * 100
             pct_vs_l30d = None
             if l30d and l30d > 0:
                 pct_vs_l30d = (l30d - price) / l30d * 100
             rows.append(
                 {
+                    "shop_id": sid,
                     "shop_label": label,
                     "name": name,
                     "category": category,
+                    "code": code,
                     "price": price,
                     "full_price": full_price,
                     "l30d_price": l30d,

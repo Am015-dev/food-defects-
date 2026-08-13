@@ -70,6 +70,7 @@ class ItemPrice(Base):
     id = Column(Integer, primary_key=True)
     snapshot_id = Column(Integer, ForeignKey("snapshots.id"), nullable=False)
     item_id = Column(Integer, nullable=False)  # e-food's id, store-specific (not shared across shops)
+    code = Column(String)  # e-food's item uuid, used to link back to the live product
     name = Column(String, nullable=False)
     category = Column(String)
     price = Column(Float)
@@ -84,6 +85,26 @@ class ItemPrice(Base):
     snapshot = relationship("Snapshot", back_populates="item_prices")
 
 
+def _add_missing_columns():
+    """Tiny forward-only migration.
+
+    create_all() only creates missing TABLES, never missing columns, so a
+    database created by an earlier version keeps its old shape and every
+    query naming a new column fails. Rather than pull in a migration
+    framework for one column, add whatever is missing directly.
+    """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if not inspector.has_table("item_prices"):
+        return
+    existing = {c["name"] for c in inspector.get_columns("item_prices")}
+    if "code" not in existing:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE item_prices ADD COLUMN code VARCHAR"))
+        print("db: added item_prices.code")
+
+
 def init_db(retries=5, delay_seconds=2):
     """Create tables if they don't exist yet. Retries briefly: on a fresh
     deploy the web service can start importing before a just-provisioned
@@ -92,6 +113,7 @@ def init_db(retries=5, delay_seconds=2):
     for attempt in range(retries):
         try:
             Base.metadata.create_all(engine)
+            _add_missing_columns()
             return
         except Exception as exc:  # noqa: BLE001
             last_exc = exc

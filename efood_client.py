@@ -28,3 +28,25 @@ def fetch_restaurant(restaurant_id, timeout=25):
     if payload.get("status") != "ok":
         raise RuntimeError(f"API returned an error for {restaurant_id}: {payload.get('message')}")
     return payload["data"]
+
+
+def menu_item_url(restaurant_id, item_code):
+    """The public API URL for a single product -- shown on the verification
+    page so a finding can be checked against e-food directly."""
+    return (
+        f"{BASE_URL}/api/v1/restaurants/menuitem/"
+        f"?item_code={item_code}&restaurant_id={restaurant_id}"
+    )
+
+
+def fetch_menu_item(restaurant_id, item_code, timeout=20):
+    """Fetch ONE product's current live data. Tiny compared with a whole
+    catalog, so it's safe to do inside a web request."""
+    response = requests.get(
+        menu_item_url(restaurant_id, item_code), headers=HEADERS, timeout=timeout
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("status") != "ok":
+        raise RuntimeError(f"API returned an error: {payload.get('message')}")
+    return payload["data"]

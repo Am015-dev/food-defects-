@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 
 from flask import Flask, Response, abort, jsonify, render_template_string, request
 
-from db import SessionLocal, Snapshot, init_db
+from db import ItemPrice, SessionLocal, Snapshot, init_db
+from efood_client import fetch_menu_item, menu_item_url
 from queries import (
     compare_across_shops,
     get_flagged_items,
@@ -19,7 +20,7 @@ from queries import (
     get_latest_snapshot,
     iter_all_sales,
 )
-from shops import SHOPS
+from shops import SHOP_URLS, SHOPS
 
 app = Flask(__name__)
 try:
@@ -151,10 +152,18 @@ def view_from_snapshot(session, shop_id, label, snapshot):
         "total_items": snapshot.total_items,
         "total_categories": snapshot.total_categories,
         "zero_price_bugs": [
-            {"name": it.name, "category": it.category} for it in items if it.is_zero_price_bug
+            {"name": it.name, "category": it.category, "code": it.code, "shop_id": shop_id}
+            for it in items
+            if it.is_zero_price_bug
         ],
         "placeholder_bugs": [
-            {"name": it.name, "category": it.category, "price": it.price}
+            {
+                "name": it.name,
+                "category": it.category,
+                "price": it.price,
+                "code": it.code,
+                "shop_id": shop_id,
+            }
             for it in items
             if it.is_placeholder_bug
         ],
@@ -166,6 +175,8 @@ def view_from_snapshot(session, shop_id, label, snapshot):
                     "price": it.price,
                     "full_price": it.full_price,
                     "pct": it.deal_pct,
+                    "code": it.code,
+                    "shop_id": shop_id,
                 }
                 for it in items
                 if it.is_verified_deal
@@ -295,6 +306,8 @@ BASE_STYLE = """
   .price-was { color: var(--muted); text-decoration: line-through; }
   .price-now { font-weight: 700; }
   .empty { color: var(--muted); font-size: 13px; font-style: italic; }
+  ul.items a, table a, .panel p a { color: var(--accent); text-decoration: none; }
+  ul.items a:hover, table a:hover, .panel p a:hover { text-decoration: underline; }
   footer { max-width: 1100px; margin: 0 auto; padding: 0 24px 40px; color: var(--muted); font-size: 12px; }
   footer a { color: var(--accent); }
 </style>
@@ -353,7 +366,10 @@ DASHBOARD_TEMPLATE = (
       {% if bugs.zero_price %}
       <ul class="items">
         {% for it in bugs.zero_price %}
-        <li>{{ it.name }} <span class="item-cat">&middot; {{ it.shop_label }} &middot; {{ it.category }}</span></li>
+        <li>
+          {% if it.code %}<a href="/item/{{ it.shop_id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
+          <span class="item-cat">&middot; {{ it.shop_label }} &middot; {{ it.category }}</span>
+        </li>
         {% endfor %}
       </ul>
       {% else %}
@@ -366,7 +382,10 @@ DASHBOARD_TEMPLATE = (
       {% if bugs.placeholder %}
       <ul class="items">
         {% for it in bugs.placeholder[:20] %}
-        <li>{{ it.name }} <span class="item-cat">&middot; {{ it.shop_label }} &middot; {{ it.category }} &middot; now {{ "%.2f"|format(it.price) }}&euro;</span></li>
+        <li>
+          {% if it.code %}<a href="/item/{{ it.shop_id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
+          <span class="item-cat">&middot; {{ it.shop_label }} &middot; {{ it.category }} &middot; now {{ "%.2f"|format(it.price) }}&euro;</span>
+        </li>
         {% endfor %}
       </ul>
       {% if bugs.placeholder|length > 20 %}
@@ -386,7 +405,7 @@ DASHBOARD_TEMPLATE = (
       <tr><th>Item</th><th>Shop</th><th>Category</th><th>Now</th><th>Was</th><th>Below 30d-low</th></tr>
       {% for d in bargains %}
       <tr>
-        <td>{{ d.name }}</td>
+        <td>{% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
         <td>{{ d.shop_label }}</td>
         <td class="item-cat">{{ d.category }}</td>
         <td class="price-now">{{ "%.2f"|format(d.price) }}&euro;</td>
@@ -460,7 +479,7 @@ DASHBOARD_TEMPLATE = (
           <tr><th>Item</th><th>Category</th><th>Now</th><th>Was</th><th>Below 30d-low</th></tr>
           {% for d in r.verified_deals[:15] %}
           <tr>
-            <td>{{ d.name }}</td>
+            <td>{% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
             <td class="item-cat">{{ d.category }}</td>
             <td class="price-now">{{ "%.2f"|format(d.price) }}&euro;</td>
             <td class="price-was">{{ "%.2f"|format(d.full_price) }}&euro;</td>
@@ -649,12 +668,17 @@ CSV_HEADER = [
     "pct_below_30_day_low",
     "verified_real_deal",
     "snapshot_date",
+    "verify_url",
 ]
 
 
 @app.route("/download/sales.csv")
 def download_sales_csv():
     shop_id = request.args.get("shop_id", type=int)
+    # Read anything request-scoped BEFORE the generator runs: Flask tears
+    # the request context down once it starts streaming, so touching
+    # `request` inside generate() raises and truncates the download.
+    base_url = request.url_root.rstrip("/")
 
     def generate():
         # Streamed a row at a time: the full export is ~10k rows / ~3MB,
@@ -687,6 +711,9 @@ def download_sales_csv():
                         f'{r["pct_vs_l30d"]:.1f}' if r["pct_vs_l30d"] is not None else "",
                         "yes" if r["is_verified_deal"] else "no",
                         r["snapshot_date"],
+                        f"{base_url}/item/{r['shop_id']}/{r['code']}"
+                        if r.get("code")
+                        else "",
                     ]
                 )
                 yield flush()
@@ -730,6 +757,171 @@ def compare():
 # plain scripts on GitHub Actions runners (see .github/workflows/), which
 # have gigabytes of RAM and connect straight to the database. This web
 # service stays read-only and small.
+
+
+VERIFY_TEMPLATE = (
+    """
+<!doctype html>
+<html lang="el">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verify: {{ stored.name if stored else code }}</title>
+"""
+    + BASE_STYLE
+    + """
+</head>
+<body>
+<header>
+  <h1>{{ stored.name if stored else "Product" }}</h1>
+  <p>{{ shop_label }}{% if stored %} &middot; {{ stored.category }}{% endif %}</p>
+</header>
+"""
+    + NAV
+    + """
+<main>
+  <div class="panel">
+    <h2>Live check against e-food, just now</h2>
+    {% if live_error %}
+      <div class="error">Couldn't reach e-food to verify: {{ live_error }}</div>
+    {% else %}
+      <p class="meta">
+        Re-queried e-food's own product endpoint at page load. This is their
+        answer right now, not our stored copy.
+      </p>
+      <table>
+        <tr>
+          <th></th>
+          <th>Our snapshot{% if stored %} ({{ snapshot_date }}){% endif %}</th>
+          <th>e-food, live</th>
+        </tr>
+        <tr>
+          <td>Price</td>
+          <td>{{ "%.2f"|format(stored.price) ~ "€" if stored else "&mdash;"|safe }}</td>
+          <td class="price-now">{{ live.calculated_price or ("%.2f"|format(live.price) ~ "€") }}</td>
+        </tr>
+        <tr>
+          <td>Full (pre-discount) price</td>
+          <td>{{ "%.2f"|format(stored.full_price) ~ "€" if stored and stored.full_price else "&mdash;"|safe }}</td>
+          <td>{{ "%.2f"|format(live.full_price) ~ "€" if live.full_price is not none else "&mdash;"|safe }}</td>
+        </tr>
+        <tr>
+          <td>30-day-low reference</td>
+          <td>{{ "%.2f"|format(stored.l30d_price) ~ "€" if stored and stored.l30d_price is not none else "&mdash;"|safe }}</td>
+          <td>{{ ("%.2f"|format(live_l30d) ~ "€") if live_l30d is not none else "&mdash;"|safe }}</td>
+        </tr>
+        <tr>
+          <td>Available</td>
+          <td>&mdash;</td>
+          <td>{{ "yes" if live.is_available else "no" }}</td>
+        </tr>
+      </table>
+
+      <div class="section">
+        {% if verdict_ok %}
+          <h3><span class="badge good">Confirmed</span> {{ verdict }}</h3>
+        {% else %}
+          <h3><span class="badge warn">Changed</span> {{ verdict }}</h3>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    <div class="section">
+      <a class="btn" href="{{ shop_url }}" target="_blank" rel="noopener">Open this shop on e-food.gr &rarr;</a>
+      <p class="meta" style="margin-top:10px">
+        e-food has no per-product page, so the link opens the shop &mdash; search
+        the product name there. The raw API response for this exact item is at
+        <a href="{{ api_url }}" target="_blank" rel="noopener">this endpoint</a>.
+      </p>
+    </div>
+  </div>
+</main>
+<footer>
+  Source: <a href="https://github.com/am015-dev/food-defects-">food-defects-</a>
+</footer>
+</body>
+</html>
+"""
+)
+
+
+def _live_l30d(live):
+    for tag in live.get("tags") or []:
+        if tag.startswith("l30d:"):
+            try:
+                return float(tag.split(":", 1)[1])
+            except ValueError:
+                return None
+    return None
+
+
+@app.route("/item/<int:shop_id>/<code>")
+def verify_item(shop_id, code):
+    """Prove a finding: re-query e-food for this one product and show what
+    they say right now, side by side with what we recorded."""
+    if shop_id not in SHOP_LABELS:
+        abort(404)
+
+    session = SessionLocal()
+    try:
+        snapshot = get_latest_snapshot(session, shop_id)
+        stored = None
+        snapshot_date = None
+        if snapshot is not None:
+            snapshot_date = snapshot.snapshot_date
+            stored = (
+                session.query(ItemPrice)
+                .filter(ItemPrice.snapshot_id == snapshot.id, ItemPrice.code == code)
+                .first()
+            )
+    finally:
+        session.close()
+
+    live, live_error, live_l30d = None, None, None
+    verdict, verdict_ok = "", False
+    try:
+        live = fetch_menu_item(shop_id, code)
+        live_l30d = _live_l30d(live)
+        price = live.get("price")
+        if price is not None and price <= 0:
+            verdict = "e-food is still returning a price of 0,00€ for this product."
+            verdict_ok = True
+        elif live_l30d is not None and live_l30d <= 0.05 and price:
+            verdict = (
+                f"e-food still reports a 30-day-low of {live_l30d:.2f}€ for this "
+                f"product, while charging {price:.2f}€."
+            )
+            verdict_ok = True
+        elif stored is not None and stored.price is not None and price is not None:
+            if abs(stored.price - price) < 0.005:
+                verdict = "Live price matches what we recorded."
+                verdict_ok = True
+            else:
+                verdict = (
+                    f"Price has moved since our snapshot: {stored.price:.2f}€ "
+                    f"then, {price:.2f}€ now."
+                )
+        else:
+            verdict = "Fetched live values above."
+            verdict_ok = True
+    except Exception as exc:  # noqa: BLE001
+        live_error = str(exc)
+
+    return render_template_string(
+        VERIFY_TEMPLATE,
+        code=code,
+        stored=stored,
+        snapshot_date=snapshot_date,
+        shop_label=SHOP_LABELS[shop_id],
+        shop_url=SHOP_URLS.get(shop_id, "https://www.e-food.gr/"),
+        api_url=menu_item_url(shop_id, code),
+        live=live,
+        live_l30d=live_l30d,
+        live_error=live_error,
+        verdict=verdict,
+        verdict_ok=verdict_ok,
+        shop_nav=SHOPS,
+    )
 
 
 @app.route("/healthz")
