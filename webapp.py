@@ -1,56 +1,126 @@
 """Dashboard: pricing bugs and verified deals across several Masoutis
-storefronts on e-food.gr, refreshed periodically.
+storefronts on e-food.gr, backed by daily snapshots in the database
+(see ingest.py / db.py), with historical and cross-shop comparison views.
 """
 
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from flask import Flask, render_template_string
+from flask import Flask, abort, render_template_string
 
+from db import SessionLocal, init_db
 from efood_client import fetch_restaurant
 from price_analysis import analyze
+from queries import compare_across_shops, get_history, get_snapshot_items, get_latest_snapshot
 from shops import SHOPS
 
 app = Flask(__name__)
+init_db()
 
-CACHE_TTL_SECONDS = 30 * 60
-_cache = {}  # shop_id -> {"result": {...}, "fetched_at": float}
+SHOP_LABELS = {s["id"]: s["label"] for s in SHOPS}
 
 
-def get_shop_result(shop_id, label):
-    cached = _cache.get(shop_id)
-    if cached and (time.time() - cached["fetched_at"]) < CACHE_TTL_SECONDS:
-        return cached["result"]
+def view_from_snapshot(session, shop_id, label, snapshot):
+    items = get_snapshot_items(session, snapshot.id)
+    return {
+        "ok": True,
+        "id": shop_id,
+        "label": label,
+        "source": "db",
+        "snapshot_date": snapshot.snapshot_date,
+        "title": snapshot.store_title,
+        "address": snapshot.store_address,
+        "is_open": snapshot.is_open,
+        "total_items": snapshot.total_items,
+        "total_categories": snapshot.total_categories,
+        "zero_price_bugs": [
+            {"name": it.name, "category": it.category} for it in items if it.is_zero_price_bug
+        ],
+        "placeholder_bugs": [
+            {"name": it.name, "category": it.category, "price": it.price}
+            for it in items
+            if it.is_placeholder_bug
+        ],
+        "verified_deals": sorted(
+            (
+                {
+                    "name": it.name,
+                    "category": it.category,
+                    "price": it.price,
+                    "full_price": it.full_price,
+                    "pct": it.deal_pct,
+                }
+                for it in items
+                if it.is_verified_deal
+            ),
+            key=lambda d: d["pct"],
+            reverse=True,
+        ),
+    }
 
+
+def view_from_live_fetch(shop_id, label):
     try:
         data = fetch_restaurant(shop_id)
-        result = {"ok": True, "label": label, "id": shop_id, **analyze(data)}
-    except Exception as exc:  # noqa: BLE001 - surface any fetch/parse failure in the UI
-        result = {"ok": False, "label": label, "id": shop_id, "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "id": shop_id, "label": label, "error": str(exc)}
 
-    _cache[shop_id] = {"result": result, "fetched_at": time.time()}
-    return result
+    a = analyze(data)
+    info = a["information"]
+    return {
+        "ok": True,
+        "id": shop_id,
+        "label": label,
+        "source": "live",
+        "snapshot_date": None,
+        "title": info["title"],
+        "address": info["address"]["description"],
+        "is_open": info["is_open"],
+        "total_items": a["total_items"],
+        "total_categories": a["total_categories"],
+        "zero_price_bugs": [
+            {"name": it["name"], "category": it["_category"]} for it in a["zero_price_bugs"]
+        ],
+        "placeholder_bugs": [
+            {"name": it["name"], "category": it["_category"], "price": it["price"]}
+            for it in a["placeholder_reference_bugs"]
+        ],
+        "verified_deals": [
+            {
+                "name": d["item"]["name"],
+                "category": d["item"]["_category"],
+                "price": d["item"]["price"],
+                "full_price": d["item"]["full_price"],
+                "pct": d["pct"],
+            }
+            for d in a["verified_deals"]
+        ],
+    }
 
 
-def get_all_results():
-    results = [None] * len(SHOPS)
-    with ThreadPoolExecutor(max_workers=len(SHOPS)) as pool:
-        future_to_index = {
-            pool.submit(get_shop_result, shop["id"], shop["label"]): i
-            for i, shop in enumerate(SHOPS)
-        }
-        for future in as_completed(future_to_index):
-            results[future_to_index[future]] = future.result()
-    return results
+def get_shop_view(session, shop_id, label):
+    snapshot = get_latest_snapshot(session, shop_id)
+    if snapshot is not None:
+        return view_from_snapshot(session, shop_id, label, snapshot)
+    return view_from_live_fetch(shop_id, label)
 
 
-TEMPLATE = """
-<!doctype html>
-<html lang="el">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Masoutis price-defect dashboard</title>
+def get_all_shop_views():
+    session = SessionLocal()
+    try:
+        results = [None] * len(SHOPS)
+        with ThreadPoolExecutor(max_workers=len(SHOPS)) as pool:
+            future_to_index = {
+                pool.submit(get_shop_view, session, shop["id"], shop["label"]): i
+                for i, shop in enumerate(SHOPS)
+            }
+            for future in as_completed(future_to_index):
+                results[future_to_index[future]] = future.result()
+        return results
+    finally:
+        session.close()
+
+
+BASE_STYLE = """
 <style>
   :root {
     --bg: #0f1115; --panel: #171a21; --border: #262b36;
@@ -68,14 +138,15 @@ TEMPLATE = """
   header { padding: 28px 24px 8px; max-width: 1100px; margin: 0 auto; }
   header h1 { margin: 0 0 6px; font-size: 22px; }
   header p { margin: 0; color: var(--muted); font-size: 13.5px; }
-  nav { max-width: 1100px; margin: 16px auto 0; padding: 0 24px; display: flex; flex-wrap: wrap; gap: 8px; }
+  nav { max-width: 1100px; margin: 16px auto 0; padding: 0 24px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   nav a {
     color: var(--accent); text-decoration: none; font-size: 13px;
     border: 1px solid var(--border); padding: 5px 10px; border-radius: 999px;
   }
   nav a:hover { border-color: var(--accent); }
+  nav .sep { color: var(--border); }
   main { max-width: 1100px; margin: 0 auto; padding: 16px 24px 60px; }
-  .shop {
+  .shop, .panel {
     background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
     padding: 20px 22px; margin: 18px 0;
   }
@@ -85,6 +156,8 @@ TEMPLATE = """
   .stats b { color: var(--text); }
   .error { background: var(--bad-bg); border: 1px solid var(--bad); color: var(--bad);
     padding: 10px 12px; border-radius: 8px; font-size: 13.5px; }
+  .source-tag { display: inline-block; font-size: 11px; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 999px; padding: 1px 8px; margin-left: 6px; }
   .section { margin-top: 14px; }
   .section h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
     margin: 0 0 8px; color: var(--muted); }
@@ -108,28 +181,52 @@ TEMPLATE = """
   footer { max-width: 1100px; margin: 0 auto; padding: 0 24px 40px; color: var(--muted); font-size: 12px; }
   footer a { color: var(--accent); }
 </style>
+"""
+
+NAV = """
+<nav>
+  <a href="/">Dashboard</a>
+  <a href="/compare">Compare across shops</a>
+  <span class="sep">|</span>
+  {% for s in shop_nav %}
+  <a href="/history/{{ s.id }}">{{ s.label }} history</a>
+  {% endfor %}
+</nav>
+"""
+
+DASHBOARD_TEMPLATE = (
+    """
+<!doctype html>
+<html lang="el">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Masoutis price-defect dashboard</title>
+"""
+    + BASE_STYLE
+    + """
 </head>
 <body>
 <header>
-  <h1>🛒 Masoutis price-defect dashboard</h1>
-  <p>Live from e-food.gr's public catalog API, across {{ shops|length }} storefronts. Cached {{ cache_minutes }} min.</p>
+  <h1>\U0001F6D2 Masoutis price-defect dashboard</h1>
+  <p>Backed by daily snapshots across {{ shops|length }} storefronts. Shops with no saved snapshot yet show live data instead.</p>
 </header>
-<nav>
-  {% for r in shops %}
-  <a href="#shop-{{ r.id }}">{{ r.label }}</a>
-  {% endfor %}
-</nav>
+"""
+    + NAV
+    + """
 <main>
   {% for r in shops %}
   <section class="shop" id="shop-{{ r.id }}">
     {% if r.ok %}
-      <h2>{{ r.information.title }} <span class="meta">&mdash; {{ r.label }}</span></h2>
-      <div class="meta">{{ r.information.address.description }} &middot; {{ "Open now" if r.information.is_open else "Closed" }}</div>
+      <h2>{{ r.title }} <span class="meta">&mdash; {{ r.label }}</span>
+        <span class="source-tag">{{ r.snapshot_date if r.source == 'db' else 'live, unsaved' }}</span>
+      </h2>
+      <div class="meta">{{ r.address }} &middot; {{ "Open now" if r.is_open else "Closed" }}</div>
       <div class="stats">
         <span><b>{{ r.total_categories }}</b> categories</span>
         <span><b>{{ r.total_items }}</b> products</span>
         <span><b>{{ r.zero_price_bugs|length }}</b> zero-price bugs</span>
-        <span><b>{{ r.placeholder_reference_bugs|length }}</b> placeholder-price bugs</span>
+        <span><b>{{ r.placeholder_bugs|length }}</b> placeholder-price bugs</span>
         <span><b>{{ r.verified_deals|length }}</b> verified deals &ge;20%</span>
       </div>
 
@@ -138,7 +235,7 @@ TEMPLATE = """
         {% if r.zero_price_bugs %}
         <ul class="items">
           {% for it in r.zero_price_bugs %}
-          <li>{{ it.name }} <span class="item-cat">&middot; {{ it._category }}</span></li>
+          <li>{{ it.name }} <span class="item-cat">&middot; {{ it.category }}</span></li>
           {% endfor %}
         </ul>
         {% else %}
@@ -148,14 +245,14 @@ TEMPLATE = """
 
       <div class="section">
         <h3><span class="badge warn">Bug</span> Placeholder 30-day-low reference price (&euro;0.01)</h3>
-        {% if r.placeholder_reference_bugs %}
+        {% if r.placeholder_bugs %}
         <ul class="items">
-          {% for it in r.placeholder_reference_bugs[:10] %}
-          <li>{{ it.name }} <span class="item-cat">&middot; {{ it._category }} &middot; now {{ it.calculated_price }}</span></li>
+          {% for it in r.placeholder_bugs[:10] %}
+          <li>{{ it.name }} <span class="item-cat">&middot; {{ it.category }} &middot; now {{ "%.2f"|format(it.price) }}&euro;</span></li>
           {% endfor %}
         </ul>
-        {% if r.placeholder_reference_bugs|length > 10 %}
-        <div class="empty">&hellip; and {{ r.placeholder_reference_bugs|length - 10 }} more</div>
+        {% if r.placeholder_bugs|length > 10 %}
+        <div class="empty">&hellip; and {{ r.placeholder_bugs|length - 10 }} more</div>
         {% endif %}
         {% else %}
         <div class="empty">None found.</div>
@@ -169,10 +266,10 @@ TEMPLATE = """
           <tr><th>Item</th><th>Category</th><th>Now</th><th>Was</th><th>Below 30d-low</th></tr>
           {% for d in r.verified_deals[:15] %}
           <tr>
-            <td>{{ d.item.name }}</td>
-            <td class="item-cat">{{ d.item._category }}</td>
-            <td class="price-now">{{ d.item.calculated_price }}</td>
-            <td class="price-was">{{ "%.2f"|format(d.item.full_price) }}&euro;</td>
+            <td>{{ d.name }}</td>
+            <td class="item-cat">{{ d.category }}</td>
+            <td class="price-now">{{ "%.2f"|format(d.price) }}&euro;</td>
+            <td class="price-was">{{ "%.2f"|format(d.full_price) }}&euro;</td>
             <td class="pct">-{{ "%.0f"|format(d.pct) }}%</td>
           </tr>
           {% endfor %}
@@ -198,14 +295,138 @@ TEMPLATE = """
 </body>
 </html>
 """
+)
+
+HISTORY_TEMPLATE = (
+    """
+<!doctype html>
+<html lang="el">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ label }} - history</title>
+"""
+    + BASE_STYLE
+    + """
+</head>
+<body>
+<header>
+  <h1>{{ label }} &mdash; daily history</h1>
+  <p>One row per day this shop was ingested.</p>
+</header>
+"""
+    + NAV
+    + """
+<main>
+  <div class="panel">
+    {% if rows %}
+    <table>
+      <tr><th>Date</th><th>Products</th><th>Categories</th><th>Zero-price bugs</th><th>Placeholder-price bugs</th><th>Verified deals</th></tr>
+      {% for s in rows %}
+      <tr>
+        <td>{{ s.snapshot_date }}</td>
+        <td>{{ s.total_items }}</td>
+        <td>{{ s.total_categories }}</td>
+        <td>{{ s.zero_price_bug_count }}</td>
+        <td>{{ s.placeholder_bug_count }}</td>
+        <td>{{ s.verified_deal_count }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <div class="empty">No snapshots stored yet for this shop -- the daily ingest job hasn't run yet. Run <code>python ingest.py</code> to backfill one now.</div>
+    {% endif %}
+  </div>
+</main>
+<footer>
+  Source: <a href="https://github.com/am015-dev/food-defects-">food-defects-</a>
+</footer>
+</body>
+</html>
+"""
+)
+
+COMPARE_TEMPLATE = (
+    """
+<!doctype html>
+<html lang="el">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compare across shops</title>
+"""
+    + BASE_STYLE
+    + """
+</head>
+<body>
+<header>
+  <h1>Same product, different price</h1>
+  <p>Products found (by exact name match) in at least 2 shops' latest snapshot, where price differs by 5%+ between the cheapest and priciest branch.</p>
+</header>
+"""
+    + NAV
+    + """
+<main>
+  <div class="panel">
+    {% if groups %}
+    {% for g in groups[:100] %}
+    <div class="section">
+      <h3>{{ g.name }} <span class="item-cat">&middot; {{ g.category }}</span>
+        <span class="pct" style="margin-left:8px">+{{ "%.0f"|format(g.spread_pct) }}% spread</span>
+      </h3>
+      <table>
+        <tr><th>Shop</th><th>Price</th></tr>
+        {% for row in g.rows %}
+        <tr>
+          <td>{{ row.shop_label }}</td>
+          <td class="{{ 'price-now' if row.price == g.low else '' }}">{{ "%.2f"|format(row.price) }}&euro;</td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="empty">Not enough saved snapshots yet across shops to compare. Run <code>python ingest.py</code> first.</div>
+    {% endif %}
+  </div>
+</main>
+<footer>
+  Source: <a href="https://github.com/am015-dev/food-defects-">food-defects-</a>
+</footer>
+</body>
+</html>
+"""
+)
 
 
 @app.route("/")
 def dashboard():
-    results = get_all_results()
+    results = get_all_shop_views()
+    return render_template_string(DASHBOARD_TEMPLATE, shops=results, shop_nav=SHOPS)
+
+
+@app.route("/history/<int:shop_id>")
+def history(shop_id):
+    if shop_id not in SHOP_LABELS:
+        abort(404)
+    session = SessionLocal()
+    try:
+        rows = get_history(session, shop_id)
+    finally:
+        session.close()
     return render_template_string(
-        TEMPLATE, shops=results, cache_minutes=CACHE_TTL_SECONDS // 60
+        HISTORY_TEMPLATE, label=SHOP_LABELS[shop_id], rows=rows, shop_nav=SHOPS
     )
+
+
+@app.route("/compare")
+def compare():
+    session = SessionLocal()
+    try:
+        groups = compare_across_shops(session, SHOP_LABELS)
+    finally:
+        session.close()
+    return render_template_string(COMPARE_TEMPLATE, groups=groups, shop_nav=SHOPS)
 
 
 @app.route("/healthz")
