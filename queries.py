@@ -7,6 +7,7 @@ from collections import defaultdict
 from sqlalchemy import func, or_
 
 from db import ItemPrice, Snapshot
+from price_utils import fold_name
 
 
 def get_latest_snapshot(session, shop_id):
@@ -108,7 +109,7 @@ def get_flagged_items_filtered(session, snapshot_id, q=None, bug_type=None):
             )
         )
     if q:
-        query = query.filter(ItemPrice.name.ilike(f"%{q}%"))
+        query = query.filter(ItemPrice.name_fold.ilike(f"%{fold_name(q)}%"))
     return query.all()
 
 
@@ -164,7 +165,7 @@ def get_deals_page(
     if category:
         query = query.filter(ItemPrice.category.ilike(f"{category}%"))
     if q:
-        query = query.filter(ItemPrice.name.ilike(f"%{q}%"))
+        query = query.filter(ItemPrice.name_fold.ilike(f"%{fold_name(q)}%"))
     if min_pct:
         query = query.filter(ItemPrice.deal_pct >= min_pct)
 
@@ -289,7 +290,7 @@ def compare_across_shops(
             .filter(ItemPrice.snapshot_id == snap.id, ItemPrice.price > 0)
         )
         if q:
-            query = query.filter(ItemPrice.name.ilike(f"%{q}%"))
+            query = query.filter(ItemPrice.name_fold.ilike(f"%{fold_name(q)}%"))
         if category:
             query = query.filter(ItemPrice.category.ilike(f"{category}%"))
         label = shop_labels_by_id[shop_id]
@@ -373,7 +374,7 @@ def iter_all_sales(session, shop_labels_by_id, shop_id=None, q=None, category=No
             )
         )
         if q:
-            query = query.filter(ItemPrice.name.ilike(f"%{q}%"))
+            query = query.filter(ItemPrice.name_fold.ilike(f"%{fold_name(q)}%"))
         if category:
             query = query.filter(ItemPrice.category.ilike(f"{category}%"))
         discounted = query.all()

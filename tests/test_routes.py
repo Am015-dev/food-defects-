@@ -127,6 +127,14 @@ def test_dashboard_with_data(client, seeded):
     assert "Πραγματική Προσφορά" in body
 
 
+def test_dashboard_search_is_accent_insensitive(client, seeded):
+    # "Μηδενική" carries a tone mark; searching unaccented, wrong-case
+    # Greek should still find it via the name_fold column.
+    resp = client.get("/", query_string={"q": "μηδενικη"})
+    assert resp.status_code == 200
+    assert "Μηδενική Τιμή" in resp.get_data(as_text=True)
+
+
 @pytest.mark.parametrize(
     "params",
     [
