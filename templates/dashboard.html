@@ -12,9 +12,18 @@
 <section class="panel banner">
   <h2>⏳ Λήψη νέων δεδομένων…</h2>
   <p class="meta">Ολοκληρώθηκαν {{ refresh.done }} από {{ refresh.total }} καταστήματα.
-  Τα καταστήματα κατεβαίνουν ένα-ένα για λόγους μνήμης· η σελίδα ανανεώνεται μόνη της.</p>
+  Τα καταστήματα κατεβαίνουν ένα-ένα για λόγους μνήμης — ανανεώστε τη σελίδα σε λίγο για να δείτε την πρόοδο.</p>
 </section>
-<meta http-equiv="refresh" content="15">
+{% elif is_stale %}
+<section class="panel banner">
+  <h2>⚠️ Τα δεδομένα μπορεί να είναι παλιά</h2>
+  <p class="meta">Τελευταία ενημέρωση: {{ last_updated|grdate if last_updated else "ποτέ" }}.
+  Η προγραμματισμένη ενημέρωση τρέχει καθημερινά στις 05:00 UTC· αν λείπει για πάνω από μία μέρα,
+  μπορείτε να τη ζητήσετε χειροκίνητα.
+  <form method="post" action="/refresh" style="display:inline-block; margin-left:8px">
+    <button type="submit" class="btn secondary">Ανανέωση τώρα →</button>
+  </form></p>
+</section>
 {% endif %}
 
 {% if trend_charts %}

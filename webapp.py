@@ -91,28 +91,24 @@ def inject_globals():
     return {"shop_nav": SHOPS, "page_url": page_url}
 
 
-# ---------- Self-population -------------------------------------------
+# ---------- Manual refresh -----------------------------------------
 #
-# The dashboard keeps itself current without any external scheduler.
-# Render's free tier has no cron service, so when a page load notices
-# today's snapshots are missing it kicks off a background refresh.
+# The real scheduler is .github/workflows/daily-ingest.yml: a GitHub
+# Actions runner (plenty of RAM) fetches every shop once a day and writes
+# straight to the production database. This used to also happen
+# automatically on every page load of a memory-constrained 512MB web
+# instance -- besides duplicating the cron, that self-refresh thread
+# could be silently killed mid-run whenever gunicorn recycled the worker
+# (it's configured to do so every ~200 requests), losing its progress
+# with nothing surfacing the failure.
 #
-# The refresh walks the shops STRICTLY ONE AT A TIME. That constraint is
-# the whole point: fetching all 12 catalogs at once peaked at ~460MB and
-# repeatedly got this 512MB instance OOM-killed, whereas sequential
-# fetching measures around 160MB. Each shop is committed as it finishes,
-# so if the worker is recycled or the instance sleeps mid-refresh, the
-# work already done persists and the next page load resumes the rest.
+# What's left is a manual escape hatch: POST /refresh re-fetches whatever
+# today's data is missing or unusable, one shop at a time (fetching many
+# catalogs at once peaked at ~460MB and OOM-killed this instance more
+# than once; sequential fetching measures around 160MB).
 
 _refresh_lock = threading.Lock()
-_refresh_state = {"running": False, "done": 0, "total": len(SHOPS), "error": None}
-_last_refresh_attempt = None
-
-# Don't re-attempt more often than this. Without it, a shop that keeps
-# failing would be re-fetched on every page load (and the page
-# auto-reloads while a refresh is in flight), which would mean hammering
-# e-food's API. This is meant to be a low-frequency, personal-use tool.
-REFRESH_COOLDOWN_SECONDS = 600
+_refresh_state = {"running": False, "done": 0, "total": 0, "error": None}
 
 
 def refresh_status():
@@ -128,7 +124,7 @@ def _shops_needing_refresh():
     the data looks present, so a plain date check would never re-fetch
     it, and features depending on the new column would stay broken until
     the next calendar day. Checking usability instead of mere existence
-    lets the dashboard heal itself on the next page load.
+    lets a manual refresh heal that.
     """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     session = SessionLocal()
@@ -169,25 +165,16 @@ def _run_refresh(pending):
     print("refresh: finished")
 
 
-def maybe_start_refresh():
-    """Start a background refresh if today's data is incomplete, one
-    isn't already in flight, and we're outside the cooldown. Returns True
-    if a refresh is running."""
-    global _last_refresh_attempt
-
-    now = datetime.now(timezone.utc)
+def start_refresh():
+    """Manually triggered by POST /refresh. Returns True if a refresh is
+    now running, whether just started or already in flight."""
     with _refresh_lock:
         if _refresh_state["running"]:
             return True
-        if (
-            _last_refresh_attempt is not None
-            and (now - _last_refresh_attempt).total_seconds() < REFRESH_COOLDOWN_SECONDS
-        ):
-            return False
 
     try:
         pending = _shops_needing_refresh()
-    except Exception as exc:  # noqa: BLE001 - never let this break a page render
+    except Exception as exc:  # noqa: BLE001 - never let this break the request
         print(f"refresh: could not determine staleness: {exc}")
         return False
 
@@ -197,7 +184,6 @@ def maybe_start_refresh():
     with _refresh_lock:
         if _refresh_state["running"]:
             return True
-        _last_refresh_attempt = now
         _refresh_state.update(running=True, done=0, total=len(pending), error=None)
 
     threading.Thread(target=_run_refresh, args=(pending,), daemon=True).start()
@@ -339,10 +325,11 @@ def build_counts_charts(rows):
 # ---------- Routes ----------
 
 
+STALE_AFTER_HOURS = 36
+
+
 @app.route("/")
 def dashboard():
-    maybe_start_refresh()
-
     shop_filter = request.args.get("shop", type=int)
     q = (request.args.get("q") or "").strip() or None
     bug_type = request.args.get("type") or None
@@ -372,10 +359,20 @@ def dashboard():
             per_page=30,
         )
         trend_rows = get_trend(session)
+        newest_fetch = (
+            session.query(Snapshot.fetched_at).order_by(Snapshot.fetched_at.desc()).limit(1).first()
+        )
     finally:
         session.close()
 
     last_updated = max((r["snapshot_date"] for r in ok_results if r.get("snapshot_date")), default=None)
+
+    is_stale = False
+    if newest_fetch and newest_fetch[0]:
+        # fetched_at is stored naive (see ingest.py) but always as a UTC
+        # wall-clock value, so compare against a naive UTC "now" too.
+        age_hours = (datetime.now(timezone.utc).replace(tzinfo=None) - newest_fetch[0]).total_seconds() / 3600
+        is_stale = age_hours > STALE_AFTER_HOURS
 
     return render_template(
         "dashboard.html",
@@ -387,6 +384,7 @@ def dashboard():
         trend_charts=build_counts_charts(trend_rows),
         trend_days=len(trend_rows),
         last_updated=last_updated,
+        is_stale=is_stale,
         shop_filter=shop_filter,
         q=q,
         bug_type=bug_type,
@@ -519,12 +517,18 @@ def history(shop_id):
 
 @app.route("/refresh", methods=["POST"])
 def refresh():
-    """Kick off (or report on) the background data refresh. POST-only so a
-    link prefetcher or crawler can't trigger an outbound fetch to every
-    tracked shop just by requesting the URL."""
-    running = maybe_start_refresh()
+    """Manually kick off a data refresh for whatever's stale. POST-only so
+    a link prefetcher or crawler can't trigger an outbound fetch to every
+    tracked shop just by requesting the URL. Scheduled ingestion runs via
+    GitHub Actions -- this is a manual escape hatch (e.g. to backfill a
+    shop that failed overnight), reachable both as a plain HTML form
+    submit (the dashboard's "Ανανέωση τώρα" button, no JS required) and
+    as a JSON API for progress polling."""
+    running = start_refresh()
     status = refresh_status()
     status["running"] = running or status["running"]
+    if request.accept_mimetypes.accept_html and not request.accept_mimetypes.accept_json:
+        return redirect(url_for("dashboard"))
     return jsonify(status)
 
 
