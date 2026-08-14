@@ -549,6 +549,7 @@ def compare_across_shops(
                 ItemPrice.category,
                 ItemPrice.size_info,
                 ItemPrice.metric_unit_description,
+                ItemPrice.code,
             )
             .filter(
                 ItemPrice.snapshot_id == snap.id,
@@ -558,7 +559,7 @@ def compare_across_shops(
         )
         query = _apply_text_filters(query, q=q, category=category)
         label = shop_labels_by_id[shop_id]
-        for product_id, price, category_value, size_info, metric_unit_description in query.all():
+        for product_id, price, category_value, size_info, metric_unit_description, code in query.all():
             by_product[product_id].append(
                 {
                     "shop_id": shop_id,
@@ -567,6 +568,7 @@ def compare_across_shops(
                     "category": category_value,
                     "size_info": size_info,
                     "metric_unit_description": metric_unit_description,
+                    "code": code,
                 }
             )
 

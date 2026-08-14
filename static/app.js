@@ -2,9 +2,13 @@
    1. Filter forms: selects auto-submit (the "Εφαρμογή" button stays for no-JS).
    2. Shop-jump select navigates on change.
    3. [data-quickfilter] inputs narrow already-rendered rows as you type.
-   4. th[data-sort] click-sorts the table body client-side. */
+   4. th[data-sort] click-sorts the table body client-side.
+   5. Stat count-up (vendor/countUp.umd.js).
+   6. Scroll reveals (vendor/aos.js).
+   7. Thumbnail fade-in. */
 
 document.addEventListener("DOMContentLoaded", function () {
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   // 1. Auto-submit filter selects.
   document.querySelectorAll("form.filters select").forEach(function (sel) {
     sel.addEventListener("change", function () { sel.form.submit(); });
@@ -61,4 +65,34 @@ document.addEventListener("DOMContentLoaded", function () {
       rows.forEach(function (row) { tbody.appendChild(row); });
     });
   });
+
+  // 5. Stat count-up. Numbers are server-rendered, so no-JS and script
+  //    load failure both keep the real value; separator "" keeps the
+  //    final frame byte-identical to the server-rendered text.
+  if (!reduceMotion && window.countUp) {
+    document.querySelectorAll(".stat b").forEach(function (el) {
+      var end = parseInt(el.textContent.replace(/\D/g, ""), 10);
+      if (isNaN(end)) return;
+      var counter = new countUp.CountUp(el, end, { startVal: 0, duration: 0.8, separator: "" });
+      if (!counter.error) counter.start();
+    });
+  }
+
+  // 6. Scroll reveals. disable under reduced motion; the CSS overrides in
+  //    style.css also force [data-aos] visible for no-JS/reduced-motion.
+  if (window.AOS) {
+    AOS.init({ once: true, duration: 400, offset: 40, easing: "ease-out-cubic", disable: reduceMotion });
+  }
+
+  // 7. Fade thumbnails in as they finish loading. Cached images
+  //    (img.complete) skip it so back-navigation doesn't re-fade.
+  if (!reduceMotion) {
+    document.querySelectorAll(".thumb img").forEach(function (img) {
+      if (img.complete) return;
+      img.classList.add("img-loading");
+      function reveal() { img.classList.remove("img-loading"); }
+      img.addEventListener("load", reveal);
+      img.addEventListener("error", reveal);
+    });
+  }
 });

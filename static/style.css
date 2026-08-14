@@ -283,9 +283,59 @@ button:hover { border-color: var(--accent); }
 /* ---------- Lists & tables ---------- */
 
 ul.items { list-style: none; margin: 0; padding: 0; }
-ul.items li { padding: 9px 0; border-top: 1px solid var(--border); font-size: 14px; }
+ul.items li {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 9px 0;
+  border-top: 1px solid var(--border);
+  font-size: 14px;
+}
 ul.items li:first-child { border-top: none; }
+ul.items li .li-body { min-width: 0; }
 .item-cat { color: var(--muted); font-size: 12px; }
+
+/* ---------- Thumbnails ---------- */
+
+.thumb {
+  --thumb-size: 40px;
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--thumb-size);
+  height: var(--thumb-size);
+  margin-right: 8px;
+  vertical-align: middle;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+/* The glyph is both the loading state and the no-image fallback (the CDN
+   answers 400 for items without an image; the macro's onerror removes the
+   img, revealing this). */
+.thumb::before {
+  content: "🛒";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: calc(var(--thumb-size) * 0.45);
+  opacity: 0.35;
+}
+.thumb img {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background: var(--panel-2);
+  transition: opacity 0.25s ease;
+}
+.thumb img.img-loading { opacity: 0; }
+.thumb-logo { border-radius: 6px; }
 
 .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
@@ -413,6 +463,37 @@ footer {
   .topbar-inner { padding: 10px 24px; }
 }
 
+/* ---------- Verify page head ---------- */
+
+.verify-head { display: flex; align-items: center; gap: 14px; }
+.verify-head > div { min-width: 0; }
+
+/* ---------- Motion ---------- */
+
+.panel { transition: border-color 0.15s ease, box-shadow 0.15s ease; }
+.panel:hover { border-color: var(--border-strong); box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25); }
+.stat { transition: border-color 0.15s ease, transform 0.15s ease; }
+
+/* Hidden initial states live INSIDE no-preference on purpose: the global
+   reduced-motion block below kills animations but not property values, so
+   a default-hidden element (chart line at dashoffset, a translated card)
+   would otherwise be stranded invisible for reduced-motion users. */
+@media (prefers-reduced-motion: no-preference) {
+  .stat:hover { transform: translateY(-2px); border-color: var(--border-strong); }
+  .chart-line {
+    stroke-dasharray: 1200; /* longer than any path at viewBox width 480 */
+    stroke-dashoffset: 1200;
+    animation: chart-draw 0.9s ease-out 0.15s forwards;
+  }
+}
+@keyframes chart-draw { to { stroke-dashoffset: 0; } }
+
+/* aos.css hides [data-aos] elements unconditionally; restore them when JS
+   never ran (no "js" class on <html>, see base.html) or when the user
+   prefers reduced motion. */
+html:not(.js) [data-aos] { opacity: 1 !important; transform: none !important; }
+
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
+  [data-aos] { opacity: 1 !important; transform: none !important; }
 }

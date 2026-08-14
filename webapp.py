@@ -942,6 +942,7 @@ def verify_item(shop_id, code):
     return render_template(
         "verify.html",
         code=code,
+        shop_id=shop_id,
         stored=stored,
         snapshot_date=snapshot_date,
         shop_label=SHOP_LABELS[shop_id],

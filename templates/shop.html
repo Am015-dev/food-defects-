@@ -1,9 +1,10 @@
 {% extends "base.html" %}
+{% from "_macros.html" import thumb, shop_logo %}
 {% block title %}{{ r.label }} — Παρατηρητήριο Τιμών{% endblock %}
 {% block content %}
 
 <div class="page-head shop-head">
-  <h1>{{ r.title if not r.no_data else r.label }}</h1>
+  <h1>{{ shop_logo(r.id, 32, 64) }}{{ r.title if not r.no_data else r.label }}</h1>
   <nav class="shop-switch" aria-label="Άλλο κατάστημα">
     {% if prev_id %}<a href="/shop/{{ prev_id }}">← Προηγούμενο</a>{% else %}<span class="disabled">← Προηγούμενο</span>{% endif %}
     {% if next_id %}<a href="/shop/{{ next_id }}">Επόμενο →</a>{% else %}<span class="disabled">Επόμενο →</span>{% endif %}
@@ -23,7 +24,7 @@
   <div class="stat"><b>{{ r.verified_deals|length }}</b><span>προσφορές</span></div>
 </div>
 
-<section class="panel">
+<section class="panel" data-aos="fade-up">
   <p class="meta">{{ r.address }} · {{ "ανοιχτό" if r.is_open else "κλειστό" }} · {{ r.snapshot_date|grdate }}
   · <a href="/history/{{ r.id }}">ιστορικό →</a></p>
 
@@ -32,8 +33,9 @@
     <h3><span class="badge bad">0,00 €</span> ({{ r.zero_price_bugs|length }})</h3>
     <ul class="items">
       {% for it in r.zero_price_bugs %}
-      <li>{% if it.code %}<a href="/item/{{ r.id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
-        <span class="item-cat">· {{ it.category }}</span></li>
+      <li>{{ thumb(r.id, it.code, 32, 64) }}<div class="li-body">
+        {% if it.code %}<a href="/item/{{ r.id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
+        <span class="item-cat">· {{ it.category }}</span></div></li>
       {% endfor %}
     </ul>
   </div>
@@ -44,8 +46,9 @@
     <h3><span class="badge warn">Κατώτατη 30ημ. 0,01 €</span> ({{ r.placeholder_bugs|length }})</h3>
     <ul class="items">
       {% for it in r.placeholder_bugs %}
-      <li>{% if it.code %}<a href="/item/{{ r.id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
-        <span class="item-cat">· {{ it.category }} · τώρα {{ it.price|eur }}</span></li>
+      <li>{{ thumb(r.id, it.code, 32, 64) }}<div class="li-body">
+        {% if it.code %}<a href="/item/{{ r.id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
+        <span class="item-cat">· {{ it.category }} · τώρα {{ it.price|eur }}</span></div></li>
       {% endfor %}
     </ul>
   </div>
@@ -60,7 +63,7 @@
         <tbody>
           {% for d in r.verified_deals %}
           <tr>
-            <td class="td-main">{% if d.code %}<a href="/item/{{ r.id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
+            <td class="td-main">{{ thumb(r.id, d.code, 36, 72) }}{% if d.code %}<a href="/item/{{ r.id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
             <td data-label="Τιμή" class="price-now">{{ d.price|eur }}</td>
             <td data-label="Αρχική" class="price-was">{{ d.full_price|eur }}</td>
             <td data-label="Έκπτωση" class="pct">-{{ "%.0f"|format(d.pct) }}%</td>

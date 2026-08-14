@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import thumb, shop_logo %}
 {% block title %}Πίνακας — Παρατηρητήριο Τιμών{% endblock %}
 {% block content %}
 
@@ -28,7 +29,7 @@
 </div>
 
 {% if trend_charts %}
-<section class="panel">
+<section class="panel" data-aos="fade-up">
   <h2>Τάση {{ trend_days }} ημερών</h2>
   <div class="chart-grid">
     <div>
@@ -66,7 +67,7 @@
   <button type="submit" class="js-hide">Εφαρμογή</button>
 </form>
 
-<section class="panel" id="bugs-summary">
+<section class="panel" id="bugs-summary" data-aos="fade-up">
   <h2>Σφάλματα τιμών</h2>
 
   <div class="section">
@@ -74,10 +75,10 @@
     {% if bugs.zero_price %}
     <ul class="items" id="bugs-list">
       {% for it in bugs.zero_price %}
-      <li>
+      <li>{{ thumb(it.shop_id, it.code, 32, 64) }}<div class="li-body">
         {% if it.code %}<a href="/item/{{ it.shop_id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
         <span class="item-cat">· {{ it.shop_label }} · {{ it.category }}</span>
-      </li>
+      </div></li>
       {% endfor %}
     </ul>
     {% else %}
@@ -90,10 +91,10 @@
     {% if bugs.placeholder %}
     <ul class="items">
       {% for it in bugs.placeholder[:20] %}
-      <li>
+      <li>{{ thumb(it.shop_id, it.code, 32, 64) }}<div class="li-body">
         {% if it.code %}<a href="/item/{{ it.shop_id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
         <span class="item-cat">· {{ it.shop_label }} · {{ it.category }} · τώρα {{ it.price|eur }}</span>
-      </li>
+      </div></li>
       {% endfor %}
     </ul>
     {% if bugs.placeholder|length > 20 %}
@@ -105,7 +106,7 @@
   </div>
 </section>
 
-<section class="panel" id="bargains">
+<section class="panel" id="bargains" data-aos="fade-up">
   <h2>Καλύτερες προσφορές <span class="item-cat">20%+ κάτω από την πραγματική κατώτατη 30ημ.</span></h2>
   {% if bargains %}
   <div class="table-scroll">
@@ -116,7 +117,7 @@
       <tbody>
         {% for d in bargains %}
         <tr>
-          <td class="td-main">{% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
+          <td class="td-main">{{ thumb(d.shop_id, d.code, 36, 72) }}{% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
           <td data-label="Κατάστημα"><span class="item-cat">{{ d.shop_label }}</span></td>
           <td data-label="Τιμή" class="price-now">{{ d.price|eur }}</td>
           <td data-label="Αρχική" class="price-was">{{ d.full_price|eur }}</td>
@@ -132,7 +133,7 @@
   {% endif %}
 </section>
 
-<section class="panel" id="drops">
+<section class="panel" id="drops" data-aos="fade-up">
   <h2>Πρόσφατες πτώσεις τιμών</h2>
   {% if price_drops %}
   <div class="table-scroll">
@@ -143,7 +144,7 @@
       <tbody>
         {% for d in price_drops %}
         <tr>
-          <td class="td-main">{% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
+          <td class="td-main">{{ thumb(d.shop_id, d.code, 36, 72) }}{% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
           <td data-label="Κατάστημα"><span class="item-cat">{{ d.shop_label }}</span></td>
           <td data-label="Τώρα" class="price-now">{{ d.price|eur }}</td>
           <td data-label="Πριν" class="price-was">{{ d.prev_price|eur }}</td>
@@ -159,7 +160,7 @@
   {% endif %}
 </section>
 
-<section class="panel" id="shops">
+<section class="panel" id="shops" data-aos="fade-up">
   <h2>Καταστήματα</h2>
   <div class="table-scroll">
     <table class="cards-mobile">
@@ -169,7 +170,7 @@
       <tbody>
         {% for r in shop_rows %}
         <tr>
-          <td class="td-main"><a href="/shop/{{ r.id }}">{{ r.label }}</a></td>
+          <td class="td-main">{{ shop_logo(r.id) }}<a href="/shop/{{ r.id }}">{{ r.label }}</a></td>
           <td data-label="Ημερομηνία">{% if r.no_data %}<span class="item-cat">χωρίς δεδομένα</span>{% else %}{{ r.snapshot_date|grdate }}{% endif %}</td>
           <td data-label="Προϊόντα" class="num">{{ r.total_items }}</td>
           <td data-label="Σφάλματα" class="num">{{ r.bug_count }}</td>

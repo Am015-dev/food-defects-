@@ -519,6 +519,41 @@ def test_shop_jump_unknown_shop_redirects_to_dashboard(client):
     assert resp.headers["Location"] == "/"
 
 
+CDN = "https://cdn.e-food.gr/cdn-cgi/image"
+
+
+def test_dashboard_renders_product_thumbnails_and_shop_logos(client, seeded):
+    body = client.get("/").get_data(as_text=True)
+    # Zero-price bug item (id 2 -> code-2) gets a CDN thumbnail...
+    assert f"{CDN}/h=64,fit=cover,f=auto/restaurants/{SHOP_A}/menu_item/code-2" in body
+    # ...and the shops table row gets the shop's logo.
+    assert f"{CDN}/h=44,fit=cover,f=auto/shop/{SHOP_A}/logo" in body
+
+
+def test_thumbnails_are_lazy_and_referrerless(client, seeded):
+    body = client.get("/").get_data(as_text=True)
+    assert 'loading="lazy"' in body
+    assert 'referrerpolicy="no-referrer"' in body
+
+
+def test_search_results_render_thumbnails(client, seeded):
+    body = client.get("/search", query_string={"q": COMMON_PRODUCT}).get_data(as_text=True)
+    assert f"restaurants/{SHOP_A}/menu_item/code-1" in body
+
+
+def test_shop_page_renders_thumbnails(client, seeded):
+    body = client.get(f"/shop/{SHOP_A}").get_data(as_text=True)
+    assert f"restaurants/{SHOP_A}/menu_item/code-2" in body  # zero-price bug thumb
+    assert f"shop/{SHOP_A}/logo" in body  # header logo
+
+
+def test_base_includes_vendored_assets(client):
+    body = client.get("/").get_data(as_text=True)
+    assert "vendor/aos.js" in body
+    assert "vendor/countUp.umd.js" in body
+    assert "vendor/aos.css" in body
+
+
 def test_download_csv(client, seeded):
     resp = client.get("/download/sales.csv")
     assert resp.status_code == 200

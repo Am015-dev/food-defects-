@@ -6,7 +6,13 @@
 <title>{% block title %}Παρατηρητήριο Τιμών{% endblock %}</title>
 <meta name="description" content="Σφάλματα τιμών και επαληθευμένες προσφορές στα σούπερ μάρκετ γύρω από το Χαλάνδρι, μέσω του δημόσιου API του e-food.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛒</text></svg>">
+<link rel="preconnect" href="https://cdn.e-food.gr">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/aos.css') }}">
+{# The "js" class gates AOS's hidden initial states: aos.css unconditionally
+   sets [data-aos^=fade] to opacity 0, which would blank every panel for
+   no-JS visitors without the html:not(.js) override in style.css. #}
+<script>document.documentElement.classList.add("js")</script>
 </head>
 <body>
 <header class="topbar">
@@ -38,6 +44,8 @@
   · <a href="/download/sales.csv">CSV</a>
   {% if site_last_updated %}· {{ site_last_updated|grdate }}{% endif %}
 </footer>
+<script src="{{ url_for('static', filename='vendor/aos.js') }}" defer></script>
+<script src="{{ url_for('static', filename='vendor/countUp.umd.js') }}" defer></script>
 <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </body>
 </html>

@@ -7,7 +7,7 @@
 </div>
 
 {% if charts %}
-<section class="panel">
+<section class="panel" data-aos="fade-up">
   <div class="chart-grid">
     <div>
       <h3 class="chart-title">Σφάλματα</h3>
@@ -20,12 +20,12 @@
   </div>
 </section>
 {% elif rows|length == 1 %}
-<section class="panel">
+<section class="panel" data-aos="fade-up">
   <p class="chart-note">Χρειάζονται 2+ ημέρες για γράφημα.</p>
 </section>
 {% endif %}
 
-<section class="panel">
+<section class="panel" data-aos="fade-up">
   {% if rows %}
   <div class="table-scroll">
     <table class="cards-mobile">

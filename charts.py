@@ -117,9 +117,13 @@ def line_chart(series, height=170, y_zero=True, value_suffix="", area=False):
         if len(coords) > 1:
             polyline = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
             dash_attr = f' stroke-dasharray="{dash}"' if dash else ""
+            # chart-line drives the CSS draw-in animation, which works by
+            # animating stroke-dashoffset -- only solid lines get it, since
+            # it would override a dashed series' own dash pattern.
+            cls_attr = "" if dash else ' class="chart-line"'
             parts.append(
                 f'<polyline points="{polyline}" fill="none" stroke="{color}" '
-                f'stroke-width="2" stroke-linejoin="round" stroke-linecap="round"{dash_attr}/>'
+                f'stroke-width="2" stroke-linejoin="round" stroke-linecap="round"{dash_attr}{cls_attr}/>'
             )
 
         for (i, v), (x, y) in zip(pts, coords):

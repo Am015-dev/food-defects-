@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import thumb %}
 {% block title %}Σύγκριση καταστημάτων — Παρατηρητήριο Τιμών{% endblock %}
 {% block content %}
 
@@ -28,7 +29,7 @@
   <button type="submit" class="js-hide">Εφαρμογή</button>
 </form>
 
-<section class="panel">
+<section class="panel" data-aos="fade-up">
   {% if scan_too_large %}
   <div class="empty">Ο πλήρης κατάλογος είναι πλέον πολύ μεγάλος για σύγκριση χωρίς φίλτρο —
   πληκτρολογήστε ένα προϊόν ή επιλέξτε κατηγορία παραπάνω.</div>
@@ -37,7 +38,7 @@
   {% if groups %}
   {% for g in groups %}
   <div class="section">
-    <h3>{{ g.name }} <span class="item-cat">· {{ g.category }}</span>
+    <h3>{{ thumb(g.rows[0].shop_id, g.rows[0].code, 32, 64) }}{{ g.name }} <span class="item-cat">· {{ g.category }}</span>
       <span class="pct">+{{ "%.0f"|format(g.spread_pct) }}% διαφορά</span>
     </h3>
     <div class="table-scroll">

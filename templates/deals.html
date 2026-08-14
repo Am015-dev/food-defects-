@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import thumb %}
 {% block title %}Προσφορές — Παρατηρητήριο Τιμών{% endblock %}
 {% block content %}
 
@@ -45,7 +46,7 @@
   <button type="submit" class="js-hide">Εφαρμογή</button>
 </form>
 
-<section class="panel">
+<section class="panel" data-aos="fade-up">
   <p class="meta">{{ total }} προσφορές{% if total %} · σελίδα {{ page }} από {{ pages }}{% endif %}</p>
   {% if rows %}
   <div class="table-scroll">
@@ -56,7 +57,7 @@
       <tbody>
         {% for d in rows %}
         <tr>
-          <td class="td-main">{% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
+          <td class="td-main">{{ thumb(d.shop_id, d.code, 36, 72) }}{% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
           <td data-label="Κατάστημα"><span class="item-cat">{{ d.shop_label }}</span></td>
           <td data-label="Κατηγορία"><span class="item-cat">{{ d.category }}</span></td>
           <td data-label="Τιμή" class="price-now">{{ d.price|eur }}</td>

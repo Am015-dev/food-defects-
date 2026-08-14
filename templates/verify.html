@@ -1,13 +1,17 @@
 {% extends "base.html" %}
+{% from "_macros.html" import thumb %}
 {% block title %}{{ stored.name if stored else "Προϊόν" }} — Επαλήθευση{% endblock %}
 {% block content %}
 
-<div class="page-head">
-  <h1>{{ stored.name if stored else (live.name if live else "Προϊόν") }}</h1>
-  <p class="sub">{{ shop_label }}{% if stored %} · {{ stored.category }}{% elif live.category %} · {{ live.category }}{% endif %}</p>
+<div class="page-head verify-head">
+  {{ thumb(shop_id, code, 80, 160) }}
+  <div>
+    <h1>{{ stored.name if stored else (live.name if live else "Προϊόν") }}</h1>
+    <p class="sub">{{ shop_label }}{% if stored %} · {{ stored.category }}{% elif live.category %} · {{ live.category }}{% endif %}</p>
+  </div>
 </div>
 
-<section class="panel">
+<section class="panel" data-aos="fade-up">
   <h2>Ζωντανός έλεγχος</h2>
   {% if live_error %}
   <div class="error">Αποτυχία επαλήθευσης: {{ live_error }}</div>
@@ -67,7 +71,7 @@
 </section>
 
 {% if shop_comparison %}
-<section class="panel">
+<section class="panel" data-aos="fade-up">
   <h2>Τιμή σε άλλα καταστήματα</h2>
   <div class="table-scroll">
     <table>
