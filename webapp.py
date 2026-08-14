@@ -21,7 +21,7 @@ from flask import (
     request,
     url_for,
 )
-from sqlalchemy import text
+from sqlalchemy import func, text
 
 from charts import line_chart
 from db import ItemPrice, SessionLocal, Snapshot, init_db
@@ -90,7 +90,13 @@ def inject_globals():
         args["page"] = page
         return url_for(request.endpoint, **args)
 
-    return {"shop_nav": SHOPS, "page_url": page_url}
+    session = SessionLocal()
+    try:
+        site_last_updated = session.query(func.max(Snapshot.snapshot_date)).scalar()
+    finally:
+        session.close()
+
+    return {"shop_nav": SHOPS, "page_url": page_url, "site_last_updated": site_last_updated}
 
 
 # ---------- Manual refresh -----------------------------------------

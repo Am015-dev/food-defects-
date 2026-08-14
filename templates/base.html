@@ -38,6 +38,9 @@
   Προσωπικό εργαλείο παρακολούθησης τιμών μέσω του δημόσιου API του e-food.gr.
   Καμία σχέση με το e-food ή τα καταστήματα.
   Πηγαίος κώδικας: <a href="https://github.com/am015-dev/food-defects-">food-defects-</a>
+  {% if site_last_updated %}
+  <br>Δεδομένα ενημερώθηκαν: {{ site_last_updated|grdate }}
+  {% endif %}
 </footer>
 <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </body>
