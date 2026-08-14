@@ -414,7 +414,7 @@ def dashboard():
     last_updated = max((r["snapshot_date"] for r in ok_results if r.get("snapshot_date")), default=None)
 
     # Shops that have never had a snapshot at all get their own "no
-    # data yet" empty-state per shop-card further down the page -- this
+    # data yet" row in the shop table further down the page -- this
     # banner is specifically about shops that DO have data going stale,
     # so it's driven by the oldest of each (present) shop's own newest
     # snapshot, not a global MAX that one fresh shop could dominate.
@@ -431,12 +431,32 @@ def dashboard():
         ).total_seconds() / 3600
         is_stale = age_hours > STALE_AFTER_HOURS
 
+    # A compact row per shop for the overview table -- counts reflect
+    # whatever q/bug_type filter is active, same as the bug lists above,
+    # so filtering the dashboard also narrows this table.
+    shop_rows = [
+        {
+            "id": r["id"],
+            "label": r["label"],
+            "snapshot_date": r.get("snapshot_date"),
+            "no_data": r.get("no_data", False),
+            "total_items": r.get("total_items", 0),
+            "bug_count": len(r.get("zero_price_bugs", [])) + len(r.get("placeholder_bugs", [])),
+            "deal_count": len(r.get("verified_deals", [])),
+        }
+        for r in results
+    ]
+    total_items = sum(r.get("total_items", 0) for r in ok_results)
+    total_bugs = len(bugs["zero_price"]) + len(bugs["placeholder"])
+
     return render_template(
         "dashboard.html",
-        shops=results,
+        shop_rows=shop_rows,
         bugs=bugs,
         bargains=bargains,
         total_deals=total_deals,
+        total_items=total_items,
+        total_bugs=total_bugs,
         price_drops=price_drops,
         refresh=refresh_status(),
         trend_charts=build_counts_charts(trend_rows),
@@ -447,6 +467,20 @@ def dashboard():
         q=q,
         bug_type=bug_type,
     )
+
+
+@app.route("/shop/<int:shop_id>")
+def shop_page(shop_id):
+    if shop_id not in SHOP_LABELS:
+        abort(404)
+    view = get_shop_view(shop_id, SHOP_LABELS[shop_id])
+
+    ids = [s["id"] for s in SHOPS]
+    idx = ids.index(shop_id)
+    prev_id = ids[idx - 1] if idx > 0 else None
+    next_id = ids[idx + 1] if idx < len(ids) - 1 else None
+
+    return render_template("shop.html", r=view, prev_id=prev_id, next_id=next_id)
 
 
 @app.route("/deals")
@@ -660,6 +694,14 @@ def history_jump():
     if shop_id not in SHOP_LABELS:
         return redirect(url_for("dashboard"))
     return redirect(url_for("history", shop_id=shop_id))
+
+
+@app.route("/shop")
+def shop_jump():
+    shop_id = request.args.get("shop", type=int)
+    if shop_id not in SHOP_LABELS:
+        return redirect(url_for("dashboard"))
+    return redirect(url_for("shop_page", shop_id=shop_id))
 
 
 @app.route("/history/<int:shop_id>")

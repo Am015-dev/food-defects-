@@ -485,6 +485,40 @@ def test_history_unknown_shop_404s(client):
     assert resp.status_code == 404
 
 
+def test_shop_page_known_shop(client, seeded):
+    resp = client.get(f"/shop/{SHOP_A}")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "Μηδενική Τιμή" in body
+    assert "Πραγματική Προσφορά" in body
+
+
+def test_shop_page_unknown_shop_404s(client):
+    resp = client.get("/shop/999999")
+    assert resp.status_code == 404
+
+
+def test_shop_page_no_data_shop_shows_empty_state(client):
+    # A tracked shop that's never had a snapshot at all -- must not 500.
+    from shops import SHOPS
+
+    untouched = next(s["id"] for s in SHOPS if s["id"] != SHOP_A and s["id"] != SHOP_B)
+    resp = client.get(f"/shop/{untouched}")
+    assert resp.status_code == 200
+
+
+def test_shop_jump_redirects_to_shop_page(client):
+    resp = client.get("/shop", query_string={"shop": str(SHOP_A)})
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == f"/shop/{SHOP_A}"
+
+
+def test_shop_jump_unknown_shop_redirects_to_dashboard(client):
+    resp = client.get("/shop", query_string={"shop": "999999"})
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == "/"
+
+
 def test_download_csv(client, seeded):
     resp = client.get("/download/sales.csv")
     assert resp.status_code == 200

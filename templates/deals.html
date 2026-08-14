@@ -3,8 +3,7 @@
 {% block content %}
 
 <div class="page-head">
-  <h1>Όλες οι επαληθευμένες προσφορές</h1>
-  <p class="sub">Προϊόντα σταθερής συσκευασίας, τουλάχιστον 20% κάτω από την πραγματική κατώτατη τιμή 30 ημερών.</p>
+  <h1>Προσφορές</h1>
 </div>
 
 <form class="filters" method="get" action="/deals">
@@ -74,7 +73,7 @@
     {% if page < pages %}<a href="{{ page_url(page + 1) }}">Επόμενη →</a>{% else %}<span class="disabled">Επόμενη →</span>{% endif %}
   </nav>
   {% else %}
-  <div class="empty">Καμία προσφορά με αυτά τα φίλτρα.</div>
+  <div class="empty">Καμία προσφορά.</div>
   {% endif %}
 </section>
 

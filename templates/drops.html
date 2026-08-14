@@ -3,8 +3,7 @@
 {% block content %}
 
 <div class="page-head">
-  <h1>Μεγαλύτερες πτώσεις τιμών</h1>
-  <p class="sub">Προϊόντα που φτήνυναν από το προηγούμενο στιγμιότυπο κάθε καταστήματος έως το τελευταίο.</p>
+  <h1>Πτώσεις τιμών</h1>
 </div>
 
 <form class="filters" method="get" action="/drops">
@@ -58,7 +57,7 @@
     {% if page < pages %}<a href="{{ page_url(page + 1) }}">Επόμενη →</a>{% else %}<span class="disabled">Επόμενη →</span>{% endif %}
   </nav>
   {% else %}
-  <div class="empty">Καμία πτώση τιμής με αυτά τα φίλτρα -- χρειάζονται τουλάχιστον δύο στιγμιότυπα ανά κατάστημα.</div>
+  <div class="empty">Καμία πτώση τιμής.</div>
   {% endif %}
 </section>
 

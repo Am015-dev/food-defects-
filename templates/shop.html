@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}{{ r.label }} — Παρατηρητήριο Τιμών{% endblock %}
+{% block content %}
+
+<div class="page-head shop-head">
+  <h1>{{ r.title if not r.no_data else r.label }}</h1>
+  <nav class="shop-switch" aria-label="Άλλο κατάστημα">
+    {% if prev_id %}<a href="/shop/{{ prev_id }}">← Προηγούμενο</a>{% else %}<span class="disabled">← Προηγούμενο</span>{% endif %}
+    {% if next_id %}<a href="/shop/{{ next_id }}">Επόμενο →</a>{% else %}<span class="disabled">Επόμενο →</span>{% endif %}
+  </nav>
+</div>
+
+{% if r.no_data %}
+<section class="panel">
+  <div class="empty">Δεν υπάρχει ακόμη στιγμιότυπο.</div>
+</section>
+{% else %}
+
+<div class="stat-strip">
+  <div class="stat"><b>{{ r.total_items }}</b><span>προϊόντα</span></div>
+  <div class="stat"><b>{{ r.zero_price_bugs|length }}</b><span>μηδενικές τιμές</span></div>
+  <div class="stat"><b>{{ r.placeholder_bugs|length }}</b><span>πλασματικές κατώτατες</span></div>
+  <div class="stat"><b>{{ r.verified_deals|length }}</b><span>προσφορές</span></div>
+</div>
+
+<section class="panel">
+  <p class="meta">{{ r.address }} · {{ "ανοιχτό" if r.is_open else "κλειστό" }} · {{ r.snapshot_date|grdate }}
+  · <a href="/history/{{ r.id }}">ιστορικό →</a></p>
+
+  {% if r.zero_price_bugs %}
+  <div class="section">
+    <h3><span class="badge bad">0,00 €</span> ({{ r.zero_price_bugs|length }})</h3>
+    <ul class="items">
+      {% for it in r.zero_price_bugs %}
+      <li>{% if it.code %}<a href="/item/{{ r.id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
+        <span class="item-cat">· {{ it.category }}</span></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if r.placeholder_bugs %}
+  <div class="section">
+    <h3><span class="badge warn">Κατώτατη 30ημ. 0,01 €</span> ({{ r.placeholder_bugs|length }})</h3>
+    <ul class="items">
+      {% for it in r.placeholder_bugs %}
+      <li>{% if it.code %}<a href="/item/{{ r.id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
+        <span class="item-cat">· {{ it.category }} · τώρα {{ it.price|eur }}</span></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if r.verified_deals %}
+  <div class="section">
+    <h3><span class="badge good">Προσφορές</span> ({{ r.verified_deals|length }})</h3>
+    <div class="table-scroll">
+      <table class="cards-mobile">
+        <thead><tr><th>Προϊόν</th><th data-sort>Τιμή</th><th>Αρχική</th><th data-sort>Έκπτωση</th></tr></thead>
+        <tbody>
+          {% for d in r.verified_deals %}
+          <tr>
+            <td class="td-main">{% if d.code %}<a href="/item/{{ r.id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
+            <td data-label="Τιμή" class="price-now">{{ d.price|eur }}</td>
+            <td data-label="Αρχική" class="price-was">{{ d.full_price|eur }}</td>
+            <td data-label="Έκπτωση" class="pct">-{{ "%.0f"|format(d.pct) }}%</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if not r.zero_price_bugs and not r.placeholder_bugs and not r.verified_deals %}
+  <div class="empty">Καμία εύρεση σε αυτό το κατάστημα.</div>
+  {% endif %}
+</section>
+{% endif %}
+
+{% endblock %}

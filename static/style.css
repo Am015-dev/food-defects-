@@ -146,6 +146,52 @@ main {
 }
 .stats b { color: var(--text); font-variant-numeric: tabular-nums; }
 
+/* ---------- Stat strip ---------- */
+
+.stat-strip {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin: 14px 0;
+}
+.stat {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 2px;
+}
+.stat b {
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.stat span { color: var(--muted); font-size: 12px; }
+
+@media (min-width: 720px) {
+  .stat-strip { grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .stat { padding: 14px 16px; }
+  .stat b { font-size: 26px; }
+}
+
+/* ---------- Shop page ---------- */
+
+.shop-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.shop-switch { display: flex; gap: 6px; font-size: 13px; }
+.shop-switch a, .shop-switch span.disabled {
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+}
+.shop-switch span.disabled { color: var(--border-strong); }
+
 .badge {
   display: inline-block;
   padding: 2px 9px;

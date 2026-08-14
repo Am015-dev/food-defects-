@@ -3,13 +3,11 @@
 {% block content %}
 
 <div class="page-head">
-  <h1>{{ label }} — ημερήσιο ιστορικό</h1>
-  <p class="sub">Μία γραμμή για κάθε ημέρα με αποθηκευμένο στιγμιότυπο.</p>
+  <h1>{{ label }} — ιστορικό</h1>
 </div>
 
 {% if charts %}
 <section class="panel">
-  <h2>Εξέλιξη ευρημάτων</h2>
   <div class="chart-grid">
     <div>
       <h3 class="chart-title">Σφάλματα</h3>
@@ -23,7 +21,7 @@
 </section>
 {% elif rows|length == 1 %}
 <section class="panel">
-  <p class="chart-note">Το γράφημα θα εμφανιστεί όταν συγκεντρωθούν δεδομένα από 2+ ημέρες.</p>
+  <p class="chart-note">Χρειάζονται 2+ ημέρες για γράφημα.</p>
 </section>
 {% endif %}
 
@@ -48,7 +46,7 @@
     </table>
   </div>
   {% else %}
-  <div class="empty">Δεν υπάρχουν ακόμη στιγμιότυπα για αυτό το κατάστημα — θα ληφθούν αυτόματα.</div>
+  <div class="empty">Δεν υπάρχουν ακόμη στιγμιότυπα.</div>
   {% endif %}
 </section>
 

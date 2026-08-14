@@ -4,7 +4,6 @@
 
 <div class="page-head">
   <h1>Αναζήτηση προϊόντων</h1>
-  <p class="sub">Ό,τι υπάρχει στο τελευταίο στιγμιότυπο κάθε καταστήματος — όχι μόνο σφάλματα ή προσφορές.</p>
 </div>
 
 <form class="filters" method="get" action="/search">
@@ -39,7 +38,7 @@
 
 <section class="panel">
   {% if not q %}
-  <div class="empty">Πληκτρολογήστε ένα προϊόν για αναζήτηση σε όλα τα καταστήματα.</div>
+  <div class="empty">Πληκτρολογήστε ένα προϊόν.</div>
   {% else %}
   <p class="meta">{{ total }} αποτελέσματα για «{{ q }}»{% if total %} · σελίδα {{ page }} από {{ pages }}{% endif %}</p>
   {% if rows %}

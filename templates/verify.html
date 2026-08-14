@@ -8,11 +8,10 @@
 </div>
 
 <section class="panel">
-  <h2>Ζωντανός έλεγχος στο e-food, μόλις τώρα</h2>
+  <h2>Ζωντανός έλεγχος</h2>
   {% if live_error %}
-  <div class="error">Δεν ήταν δυνατή η επαλήθευση από το e-food: {{ live_error }}</div>
+  <div class="error">Αποτυχία επαλήθευσης: {{ live_error }}</div>
   {% else %}
-  <p class="meta">Νέο ερώτημα στο endpoint προϊόντος του e-food κατά τη φόρτωση της σελίδας — αυτή είναι η απάντησή τους τώρα{% if stored %}, σε σύγκριση με το αποθηκευμένο αντίγραφό μας{% else %} (κανένα αποθηκευμένο στιγμιότυπο για σύγκριση — ίσως το προϊόν αφαιρέθηκε από τα ευρήματα){% endif %}.</p>
   <div class="table-scroll">
     <table class="kv-compare">
       <thead>
@@ -58,22 +57,18 @@
     <div class="chart-block">{{ price_chart|safe }}</div>
   </div>
   {% elif history_points == 1 %}
-  <p class="chart-note">Το γράφημα τιμής θα εμφανιστεί όταν συγκεντρωθούν δεδομένα από 2+ ημέρες.</p>
+  <p class="chart-note">Χρειάζονται 2+ ημέρες για γράφημα.</p>
   {% endif %}
 
   <div class="section">
-    <a class="btn" href="{{ shop_url }}" target="_blank" rel="noopener">Άνοιγμα καταστήματος στο e-food.gr →</a>
-    <p class="meta" style="margin-top:10px">
-      Το e-food δεν έχει σελίδα ανά προϊόν, οπότε ο σύνδεσμος ανοίγει το κατάστημα — αναζητήστε εκεί το όνομα του προϊόντος.
-      Η ωμή απάντηση του API για αυτό ακριβώς το προϊόν: <a href="{{ api_url }}" target="_blank" rel="noopener">endpoint</a>.
-    </p>
+    <a class="btn" href="{{ shop_url }}" target="_blank" rel="noopener">Άνοιγμα στο e-food.gr →</a>
+    <a class="btn secondary" href="{{ api_url }}" target="_blank" rel="noopener" style="margin-left:8px">API →</a>
   </div>
 </section>
 
 {% if shop_comparison %}
 <section class="panel">
   <h2>Τιμή σε άλλα καταστήματα</h2>
-  <p class="meta">Το ίδιο προϊόν στα υπόλοιπα καταστήματα που παρακολουθούμε, ταξινομημένο κατά τιμή.</p>
   <div class="table-scroll">
     <table>
       <thead><tr><th>Κατάστημα</th><th>Τιμή</th><th>Μέγεθος</th><th>Κανονικοποιημένη</th></tr></thead>

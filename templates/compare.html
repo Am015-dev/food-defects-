@@ -3,8 +3,7 @@
 {% block content %}
 
 <div class="page-head">
-  <h1>Ίδιο προϊόν, άλλη τιμή</h1>
-  <p class="sub">Προϊόντα που πωλούνται σε 2+ καταστήματα με διαφορά τιμής, από τα τελευταία στιγμιότυπα.</p>
+  <h1>Σύγκριση καταστημάτων</h1>
 </div>
 
 <form class="filters" method="get" action="/compare">
@@ -64,7 +63,7 @@
     {% if page < pages %}<a href="{{ page_url(page + 1) }}">Επόμενη →</a>{% else %}<span class="disabled">Επόμενη →</span>{% endif %}
   </nav>
   {% else %}
-  <div class="empty">Δεν υπάρχουν αρκετά δεδομένα για σύγκριση με αυτά τα φίλτρα.</div>
+  <div class="empty">Καμία σύγκριση.</div>
   {% endif %}
   {% endif %}
 </section>
