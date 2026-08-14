@@ -4,6 +4,7 @@ combinations, against a small seeded SQLite database."""
 from datetime import datetime, timezone
 
 import pytest
+import requests
 
 from db import SessionLocal
 from ingest import store_snapshot
@@ -206,6 +207,26 @@ def test_dashboard_search_is_accent_insensitive(client, seeded):
 def test_dashboard_filters(client, seeded, params):
     resp = client.get("/", query_string=params)
     assert resp.status_code == 200
+
+
+def test_dashboard_type_deal_filter_hides_bug_panels_shows_bargains(client, seeded):
+    # Regression: selecting "Επαληθευμένες προσφορές" used to empty both
+    # bug panels (rendering "Καμία." -- indistinguishable from a clean
+    # day) while leaving the bargains table unfiltered by type. The bug
+    # panels must not render at all under this filter, and the seeded
+    # verified deal must still show in the bargains table.
+    body = client.get("/", query_string={"type": "deal"}).get_data(as_text=True)
+    assert 'id="bugs-summary"' not in body
+    assert "Πραγματική Προσφορά" in body
+
+
+def test_dashboard_type_zero_filter_hides_bargains_panel(client, seeded):
+    body = client.get("/", query_string={"type": "zero"}).get_data(as_text=True)
+    assert 'id="bargains"' not in body
+    assert "Μηδενική Τιμή" in body
+    # Placeholder subsection must not render either -- the filter is for
+    # zero-price bugs only.
+    assert "Πλασματική Τιμή" not in body
 
 
 @pytest.mark.parametrize(
@@ -673,6 +694,28 @@ def test_item_page_cross_shop_comparison_survives_live_fetch_error(client, seede
     resp = client.get(f"/item/{SHOP_A}/code-1")
     assert resp.status_code == 200
     assert COMMON_PRODUCT in resp.get_data(as_text=True)
+
+
+def test_item_page_live_error_is_plain_language_not_raw_exception(client, seeded, monkeypatch):
+    # Regression: live_error used to be str(exc) -- a raw Python/requests
+    # exception message shown straight to a non-technical operator on the
+    # tool's core evidentiary page.
+    def _raise(*_args, **_kwargs):
+        raise RuntimeError("HTTPSConnectionPool(host='api.e-food.gr', port=443): Read timed out.")
+
+    monkeypatch.setattr("webapp.fetch_menu_item", _raise)
+    body = client.get(f"/item/{SHOP_A}/code-1").get_data(as_text=True)
+    assert "HTTPSConnectionPool" not in body
+    assert "Δεν ήταν δυνατή η ζωντανή επαλήθευση" in body
+
+
+def test_item_page_live_timeout_gets_specific_message(client, seeded, monkeypatch):
+    def _raise(*_args, **_kwargs):
+        raise requests.exceptions.Timeout("timed out")
+
+    monkeypatch.setattr("webapp.fetch_menu_item", _raise)
+    body = client.get(f"/item/{SHOP_A}/code-1").get_data(as_text=True)
+    assert "δεν απάντησε έγκαιρα" in body
 
 
 def test_shops_needing_refresh_detects_missing_name_fold(client):

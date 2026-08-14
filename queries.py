@@ -163,7 +163,7 @@ def get_price_drops(
     ], total
 
 
-def get_product_across_shops(session, product_id, shop_labels, exclude_shop_id=None):
+def get_product_across_shops(session, product_id, shop_labels, exclude_shop_id=None, latest=None):
     """Find the same product -- matched across chains by product_matching.py,
     not just an exact name string -- across all shops' latest snapshots.
 
@@ -177,44 +177,61 @@ def get_product_across_shops(session, product_id, shop_labels, exclude_shop_id=N
             e-food item code and so was never matched to a Product)
         shop_labels: Dict mapping shop_id to shop_label
         exclude_shop_id: Shop to exclude from results (e.g., the current shop)
+        latest: optional pre-fetched {shop_id: Snapshot} from
+            get_latest_snapshots_for_all_shops, so a caller that already
+            has it (e.g. verify_item) skips re-fetching it here.
     """
     if product_id is None:
         return []
 
-    latest_snapshots = {}
-    for shop_id in shop_labels.keys():
-        snap = get_latest_snapshot(session, shop_id)
-        if snap:
-            latest_snapshots[shop_id] = snap
+    if latest is None:
+        latest = get_latest_snapshots_for_all_shops(session, list(shop_labels))
 
-    results = []
-    for shop_id, snapshot in latest_snapshots.items():
-        if exclude_shop_id and shop_id == exclude_shop_id:
-            continue
+    snapshot_by_id = {
+        snap.id: shop_id for shop_id, snap in latest.items() if shop_id != exclude_shop_id
+    }
+    if not snapshot_by_id:
+        return []
 
-        item = (
-            session.query(ItemPrice)
-            .filter(
-                ItemPrice.snapshot_id == snapshot.id,
-                ItemPrice.product_id == product_id,
-            )
-            .first()
+    # One query across every shop's latest snapshot instead of one
+    # per-shop lookup -- this used to be up to 13 separate ItemPrice
+    # queries (one per tracked shop) on /item, the tool's core
+    # evidentiary page.
+    rows = (
+        session.query(ItemPrice)
+        .filter(
+            ItemPrice.snapshot_id.in_(list(snapshot_by_id)),
+            ItemPrice.product_id == product_id,
+            ItemPrice.price > 0,
         )
+        .all()
+    )
 
-        if item and item.price is not None and item.price > 0:
-            results.append({
-                "shop_id": shop_id,
-                "shop_label": shop_labels.get(shop_id, "Unknown"),
-                "name": item.name,
-                "price": item.price,
-                "full_price": item.full_price,
-                "l30d_price": item.l30d_price,
-                "size_info": item.size_info,
-                "metric_unit_description": item.metric_unit_description,
-                "category": item.category,
-            })
+    # A shop can list two listings under the same matched product (e.g.
+    # deposit vs. no-deposit bottles, same convention as
+    # compare_across_shops) -- the old per-shop .first() implicitly
+    # picked one arbitrarily; keep the cheapest explicitly instead.
+    cheapest_per_shop = {}
+    for item in rows:
+        shop_id = snapshot_by_id[item.snapshot_id]
+        existing = cheapest_per_shop.get(shop_id)
+        if existing is None or item.price < existing.price:
+            cheapest_per_shop[shop_id] = item
 
-    # Sort by price ascending
+    results = [
+        {
+            "shop_id": shop_id,
+            "shop_label": shop_labels.get(shop_id, "Unknown"),
+            "name": item.name,
+            "price": item.price,
+            "full_price": item.full_price,
+            "l30d_price": item.l30d_price,
+            "size_info": item.size_info,
+            "metric_unit_description": item.metric_unit_description,
+            "category": item.category,
+        }
+        for shop_id, item in cheapest_per_shop.items()
+    ]
     return sorted(results, key=lambda r: r["price"])
 
 

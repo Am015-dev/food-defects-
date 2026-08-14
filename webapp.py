@@ -11,6 +11,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
+import requests
 from flask import (
     Flask,
     Response,
@@ -398,14 +399,23 @@ def dashboard():
         # get_price_drops below, instead of each independently re-running
         # the same "latest snapshot per shop" queries.
         latest = get_latest_snapshots_for_all_shops(session, list(SHOP_LABELS))
-        bargains, total_deals = get_deals_page(
-            session,
-            SHOP_LABELS,
-            shop_id=shop_filter,
-            q=q,
-            per_page=30,
-            latest=latest,
-        )
+        # The "Τύπος ευρήματος" filter narrows the whole page to one kind
+        # of finding -- when it's set to a bug type, the bargains table
+        # (always verified deals) has nothing relevant to show, and
+        # rendering it anyway made "Καμία." in the bug panels above look
+        # like a clean day instead of "you filtered these out". Skip the
+        # query entirely rather than fetch data the template will hide.
+        if bug_type in (None, "deal"):
+            bargains, total_deals = get_deals_page(
+                session,
+                SHOP_LABELS,
+                shop_id=shop_filter,
+                q=q,
+                per_page=30,
+                latest=latest,
+            )
+        else:
+            bargains, total_deals = [], 0
         trend_rows = get_trend(session)
         price_drops, _ = get_price_drops(session, SHOP_LABELS, page=1, per_page=5, latest=latest)
     finally:
@@ -827,6 +837,26 @@ def _live_l30d(live):
     return None
 
 
+def _friendly_live_error(exc):
+    """A short, plain-language Greek message for verify.html -- str(exc)
+    on a live e-food fetch is a raw requests/Python exception message
+    (e.g. "HTTPSConnectionPool(...): Max retries exceeded..."), and this
+    page is the tool's core evidentiary artifact, not somewhere to show
+    a stack-trace-flavored string to a non-technical operator. The raw
+    exception is still logged server-side for debugging."""
+    print(f"verify_item: live fetch failed: {exc!r}")
+    if isinstance(exc, requests.exceptions.Timeout):
+        return "Το e-food δεν απάντησε έγκαιρα. Δοκιμάστε ξανά σε λίγο."
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return "Δεν ήταν δυνατή η σύνδεση με το e-food. Δοκιμάστε ξανά σε λίγο."
+    if isinstance(exc, requests.exceptions.HTTPError):
+        status = exc.response.status_code if exc.response is not None else None
+        if status == 404:
+            return "Το e-food δεν βρίσκει πια αυτό το προϊόν -- μπορεί να αφαιρέθηκε."
+        return "Το e-food επέστρεψε ένα σφάλμα. Δοκιμάστε ξανά σε λίγο."
+    return "Δεν ήταν δυνατή η ζωντανή επαλήθευση αυτή τη στιγμή. Δοκιμάστε ξανά σε λίγο."
+
+
 @app.route("/item/<int:shop_id>/<code>")
 def verify_item(shop_id, code):
     """Prove a finding: re-query e-food for this one product and show what
@@ -836,10 +866,16 @@ def verify_item(shop_id, code):
 
     session = SessionLocal()
     try:
+        # Computed once and reused both for this shop's own snapshot
+        # lookup below and for get_product_across_shops -- avoids that
+        # function re-fetching every tracked shop's latest snapshot on
+        # top of the one this route already needs.
+        latest = get_latest_snapshots_for_all_shops(session, list(SHOP_LABELS))
+
         # First, try to find the product in the latest snapshot. If not found,
         # search back through recent snapshots in case a new snapshot was created
         # after the dashboard link was clicked.
-        snapshot = get_latest_snapshot(session, shop_id)
+        snapshot = latest.get(shop_id)
         stored = None
         snapshot_date = None
         if snapshot is not None:
@@ -877,7 +913,7 @@ def verify_item(shop_id, code):
         if stored and stored.product_id:
             try:
                 shop_comparison = get_product_across_shops(
-                    session, stored.product_id, SHOP_LABELS, exclude_shop_id=shop_id
+                    session, stored.product_id, SHOP_LABELS, exclude_shop_id=shop_id, latest=latest
                 )
                 _enrich_with_comparison_info(shop_comparison)
             except Exception:  # noqa: BLE001
@@ -937,7 +973,7 @@ def verify_item(shop_id, code):
             verdict = "Οι ζωντανές τιμές φαίνονται παραπάνω."
             verdict_ok = True
     except Exception as exc:  # noqa: BLE001
-        live_error = str(exc)
+        live_error = _friendly_live_error(exc)
 
     return render_template(
         "verify.html",

@@ -67,9 +67,11 @@
   <button type="submit" class="js-hide">Εφαρμογή</button>
 </form>
 
+{% if bug_type != 'deal' %}
 <section class="panel" id="bugs-summary" data-aos="fade-up">
   <h2>Σφάλματα τιμών</h2>
 
+  {% if bug_type in (None, 'zero') %}
   <div class="section">
     <h3><span class="badge bad">0,00 €</span> ({{ bugs.zero_price|length }})</h3>
     {% if bugs.zero_price %}
@@ -85,7 +87,9 @@
     <div class="empty">Καμία.</div>
     {% endif %}
   </div>
+  {% endif %}
 
+  {% if bug_type in (None, 'placeholder') %}
   <div class="section">
     <h3><span class="badge warn">Κατώτατη 30ημ. 0,01 €</span> ({{ bugs.placeholder|length }})</h3>
     {% if bugs.placeholder %}
@@ -104,8 +108,11 @@
     <div class="empty">Καμία.</div>
     {% endif %}
   </div>
+  {% endif %}
 </section>
+{% endif %}
 
+{% if bug_type in (None, 'deal') %}
 <section class="panel" id="bargains" data-aos="fade-up">
   <h2>Καλύτερες προσφορές <span class="item-cat">20%+ κάτω από την πραγματική κατώτατη 30ημ.</span></h2>
   {% if bargains %}
@@ -132,6 +139,7 @@
   <div class="empty">Καμία ακόμη.</div>
   {% endif %}
 </section>
+{% endif %}
 
 <section class="panel" id="drops" data-aos="fade-up">
   <h2>Πρόσφατες πτώσεις τιμών</h2>

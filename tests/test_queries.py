@@ -246,3 +246,90 @@ def test_get_product_across_shops_none_product_id_returns_empty():
         assert get_product_across_shops(session, None, {SHOP_A: SHOP_A_LABEL}) == []
     finally:
         session.close()
+
+
+def test_get_product_across_shops_picks_cheapest_when_shop_has_two_listings():
+    # Regression: the batched single-query rewrite (was one .first() query
+    # per shop) must still keep only each shop's cheapest listing when a
+    # shop carries two rows under the same matched product (e.g. deposit
+    # vs. no-deposit bottles), not both.
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog([{"id": 1, "code": "a1", "name": "Νερό Εμφιαλωμένο 1.5L", "price": 0.60, "tags": []}]),
+        )
+        store_snapshot(
+            session,
+            SHOP_B,
+            SHOP_B_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    {"id": 2, "code": "b1", "name": "Νερό Εμφιαλωμένο 1.5L", "price": 0.65, "tags": []},
+                    {
+                        "id": 3,
+                        "code": "b2",
+                        "name": "Νερό Εμφιαλωμένο 1.5L Με Επιστροφή",
+                        "price": 0.80,
+                        "tags": [],
+                    },
+                ]
+            ),
+        )
+        session.commit()
+
+        from db import ItemPrice
+
+        a1 = session.query(ItemPrice).filter_by(code="a1").one()
+        b1 = session.query(ItemPrice).filter_by(code="b1").one()
+        b2 = session.query(ItemPrice).filter_by(code="b2").one()
+        # Force b2 onto the same product as b1, regardless of whether the
+        # fuzzy matcher happened to merge them on its own.
+        b2.product_id = b1.product_id
+        session.commit()
+
+        shop_labels = {SHOP_A: SHOP_A_LABEL, SHOP_B: SHOP_B_LABEL}
+        results = get_product_across_shops(session, a1.product_id, shop_labels, exclude_shop_id=SHOP_A)
+        assert len(results) == 1
+        assert results[0]["shop_id"] == SHOP_B
+        assert results[0]["price"] == pytest.approx(0.65)
+    finally:
+        session.close()
+
+
+def test_get_product_across_shops_accepts_prefetched_latest():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog([{"id": 1, "code": "a1", "name": "Anatoli Κουρκουμάς 60g", "price": 1.50, "tags": []}]),
+        )
+        store_snapshot(
+            session,
+            SHOP_B,
+            SHOP_B_LABEL,
+            "2026-08-13",
+            _catalog([{"id": 2, "code": "b1", "name": "Κουρκουμάς Anatoli 100g", "price": 1.90, "tags": []}]),
+        )
+        session.commit()
+
+        from db import ItemPrice
+        from queries import get_latest_snapshots_for_all_shops
+
+        stored = session.query(ItemPrice).filter_by(code="a1").one()
+        shop_labels = {SHOP_A: SHOP_A_LABEL, SHOP_B: SHOP_B_LABEL}
+        latest = get_latest_snapshots_for_all_shops(session, list(shop_labels))
+        results = get_product_across_shops(
+            session, stored.product_id, shop_labels, exclude_shop_id=SHOP_A, latest=latest
+        )
+        assert len(results) == 1
+        assert results[0]["shop_id"] == SHOP_B
+    finally:
+        session.close()
