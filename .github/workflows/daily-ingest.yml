@@ -42,11 +42,20 @@ jobs:
       # postgresql-client-18 specifically: the unversioned package gives
       # Ubuntu 24.04's pg_dump 16, which refuses to dump the Postgres 18
       # server Render provisions ("aborting because of server version
-      # mismatch"). The runner image already has the PGDG apt repo that
-      # carries versioned client packages.
+      # mismatch"). Versioned client packages come from the PGDG apt
+      # repository, which the runner image does NOT have configured (its
+      # preinstalled pg_dump 16 merely carries a pgdg version string), so
+      # add the repo first.
       - name: Install postgresql-client
         if: success()
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client-18
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl --fail -sS -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-18
 
       - name: Dump database
         if: success()

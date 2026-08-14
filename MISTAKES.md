@@ -69,6 +69,41 @@ examples.
 
 ---
 
+## 2026-08-14 — assumed a CI runner had an apt repo configured because a preinstalled package carried its version string
+
+**Where:** `.github/workflows/daily-ingest.yml`, the backup step
+
+**What happened:** The nightly backup failed with a pg_dump version
+mismatch (runner's pg_dump 16 vs Render's Postgres 18 server). The
+first fix changed `apt-get install postgresql-client` to
+`postgresql-client-18`, reasoning that the runner must have the PGDG
+apt repository configured because its preinstalled pg_dump reported
+version "16.14-1.pgdg24.04+1" — a PGDG package string. The next run
+failed with "Unable to locate package postgresql-client-18": the
+image bakes in a PGDG-built package but does not keep the PGDG apt
+source configured, so versioned client packages aren't installable
+without adding the repo first.
+
+**Root cause:** Inferred available apt packages from a version string
+on an already-installed binary instead of from what the image's apt
+sources actually serve. A baked-in package proves only that the repo
+was reachable at image-build time, not that it is configured now.
+The fix was shipped without any way to verify it short of a full
+40-minute production run, so the wrong assumption cost a whole cycle.
+
+**Fix:** The workflow now adds the PGDG apt repository itself (keyring
+to /usr/share/postgresql-common/pgdg, signed-by entry in
+sources.list.d) before installing `postgresql-client-18`.
+
+**Lesson:** Before pinning a versioned package in CI, verify the repo
+that serves it is actually in the image's apt sources (runner-images
+docs, or an `apt-cache policy` step) — a pgdg/ppa-flavored version
+string on a preinstalled tool is not evidence. When a fix can only be
+validated by a slow production run, spend the extra minute checking
+the premise up front.
+
+---
+
 ## 2026-08-13 — string replace mangled a literal period in a unit suffix
 
 **Where:** `price_utils.py`, `format_normalized_price`
