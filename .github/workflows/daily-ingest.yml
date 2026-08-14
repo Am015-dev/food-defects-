@@ -39,9 +39,14 @@ jobs:
       # e-food doesn't expose yesterday's prices, only today's. Render's
       # free Postgres has no backups of its own, so dump the database
       # after every successful ingest and keep it as a workflow artifact.
+      # postgresql-client-18 specifically: the unversioned package gives
+      # Ubuntu 24.04's pg_dump 16, which refuses to dump the Postgres 18
+      # server Render provisions ("aborting because of server version
+      # mismatch"). The runner image already has the PGDG apt repo that
+      # carries versioned client packages.
       - name: Install postgresql-client
         if: success()
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client-18
 
       - name: Dump database
         if: success()
