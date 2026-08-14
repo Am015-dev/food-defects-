@@ -1,5 +1,6 @@
 """Read-side queries over stored snapshots: latest state per shop, history
-over time, and cross-shop price comparison for the same product name.
+over time, and cross-shop price comparison for the same matched product
+(see product_matching.py).
 """
 
 import math
@@ -8,7 +9,7 @@ from collections import defaultdict
 from sqlalchemy import and_, func, literal, literal_column, or_
 from sqlalchemy.orm import aliased
 
-from db import ItemPrice, Snapshot
+from db import ItemPrice, Product, Snapshot
 from price_utils import fold_name
 
 
@@ -162,18 +163,24 @@ def get_price_drops(
     ], total
 
 
-def get_product_across_shops(session, product_name, shop_labels, exclude_shop_id=None):
-    """Find the same product (by name) across all shops' latest snapshots.
+def get_product_across_shops(session, product_id, shop_labels, exclude_shop_id=None):
+    """Find the same product -- matched across chains by product_matching.py,
+    not just an exact name string -- across all shops' latest snapshots.
 
     Returns list of dicts: {shop_id, shop_label, name, price, full_price,
-    l30d_price, size_info, category} ordered by price ascending.
+    l30d_price, size_info, metric_unit_description, category} ordered by
+    price ascending.
 
     Args:
         session: SQLAlchemy session
-        product_name: Exact product name to search for
+        product_id: Product.id to search for (None if this listing has no
+            e-food item code and so was never matched to a Product)
         shop_labels: Dict mapping shop_id to shop_label
         exclude_shop_id: Shop to exclude from results (e.g., the current shop)
     """
+    if product_id is None:
+        return []
+
     latest_snapshots = {}
     for shop_id in shop_labels.keys():
         snap = get_latest_snapshot(session, shop_id)
@@ -185,12 +192,11 @@ def get_product_across_shops(session, product_name, shop_labels, exclude_shop_id
         if exclude_shop_id and shop_id == exclude_shop_id:
             continue
 
-        # Find product by exact name match
         item = (
             session.query(ItemPrice)
             .filter(
                 ItemPrice.snapshot_id == snapshot.id,
-                ItemPrice.name == product_name
+                ItemPrice.product_id == product_id,
             )
             .first()
         )
@@ -511,10 +517,14 @@ def compare_across_shops(
     category=None,
     latest=None,
 ):
-    """For the latest snapshot of each shop, group items by exact product
-    name and return those sold in >=min_shops shops, sorted by how much
-    the price differs between the cheapest and priciest shop. q and
-    category narrow the scan in SQL before anything is grouped.
+    """For the latest snapshot of each shop, group items by the Product
+    they've been matched to (product_matching.py -- fuzzy, cross-chain,
+    not just an exact name string) and return those sold in >=min_shops
+    shops, sorted by how much the price differs between the cheapest and
+    priciest shop. q and category narrow the scan in SQL before anything
+    is grouped. Items with no product_id (no e-food code, so never
+    matched) are excluded -- the same effective behavior as before, when
+    an unmatched item couldn't group with anything either.
 
     `latest` lets a caller that already ran
     get_latest_snapshots_for_all_shops (e.g. to build a category list)
@@ -526,7 +536,7 @@ def compare_across_shops(
     if len(latest) < min_shops:
         return []
 
-    by_name = defaultdict(list)
+    by_product = defaultdict(list)
     for shop_id, snap in latest.items():
         # Column-only query: this walks every product in every shop
         # (~85k rows across 12 shops), and only fields are needed.
@@ -534,18 +544,22 @@ def compare_across_shops(
         # cannot afford.
         query = (
             session.query(
-                ItemPrice.name,
+                ItemPrice.product_id,
                 ItemPrice.price,
                 ItemPrice.category,
                 ItemPrice.size_info,
                 ItemPrice.metric_unit_description,
             )
-            .filter(ItemPrice.snapshot_id == snap.id, ItemPrice.price > 0)
+            .filter(
+                ItemPrice.snapshot_id == snap.id,
+                ItemPrice.price > 0,
+                ItemPrice.product_id.isnot(None),
+            )
         )
         query = _apply_text_filters(query, q=q, category=category)
         label = shop_labels_by_id[shop_id]
-        for name, price, category_value, size_info, metric_unit_description in query.all():
-            by_name[name].append(
+        for product_id, price, category_value, size_info, metric_unit_description in query.all():
+            by_product[product_id].append(
                 {
                     "shop_id": shop_id,
                     "shop_label": label,
@@ -557,10 +571,10 @@ def compare_across_shops(
             )
 
     results = []
-    for name, rows in by_name.items():
-        # A shop can list the same product name twice (e.g. deposit vs.
-        # no-deposit bottles) -- keep only its cheapest listing so each
-        # shop appears at most once per comparison group.
+    for product_id, rows in by_product.items():
+        # A shop can list two listings under the same matched product
+        # (e.g. deposit vs. no-deposit bottles) -- keep only its
+        # cheapest so each shop appears at most once per group.
         cheapest_per_shop = {}
         for r in rows:
             existing = cheapest_per_shop.get(r["shop_id"])
@@ -578,7 +592,7 @@ def compare_across_shops(
         if spread_pct >= min_spread_pct:
             results.append(
                 {
-                    "name": name,
+                    "product_id": product_id,
                     "category": deduped_rows[0]["category"],
                     "rows": sorted(deduped_rows, key=lambda r: r["price"]),
                     "low": lo,
@@ -586,6 +600,20 @@ def compare_across_shops(
                     "spread_pct": spread_pct,
                 }
             )
+
+    if not results:
+        return []
+
+    # One batch lookup for the display name of just the groups that
+    # survived filtering, rather than joining Product for all ~85k
+    # scanned rows up front.
+    canonical_names = dict(
+        session.query(Product.id, Product.canonical_name)
+        .filter(Product.id.in_([r["product_id"] for r in results]))
+        .all()
+    )
+    for r in results:
+        r["name"] = canonical_names.get(r["product_id"], "?")
 
     results.sort(key=lambda r: r["spread_pct"], reverse=True)
     return results

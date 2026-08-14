@@ -22,6 +22,53 @@ or the user caught. Skip anything that was just an unfinished draft.
 
 ---
 
+## 2026-08-13 — fuzzy product matching used the wrong rapidfuzz scorer, verified only at small scale
+
+**Where:** `product_matching.py`, `best_match` (the product-identity layer)
+
+**What happened:** Built a fuzzy matcher for linking the same product
+across shops/chains using `rapidfuzz.fuzz.token_set_ratio`, and verified
+it against a handful of hand-picked example pairs — all looked correct.
+Only when tested against the real ~7,300-item catalog did the real
+failure surface: 1,822 of 7,353 items in a *single* shop's own catalog
+got merged into the wrong product. `token_set_ratio` treats one name's
+tokens being a full subset of another's as a perfect (100) match, which
+is exactly the shape of a supermarket catalog full of long descriptive
+names sharing brand/generic words — it merged "Coca-Cola Zero" with
+"Coca-Cola Zero Χωρίς Καφεΐνη" (with/without caffeine), different soda
+brands sharing common descriptive words ("Fanta" with "Έψα"/"Ήβη"), and
+more.
+
+**Root cause:** Hand-picked test cases were all either "clearly the same
+product, reordered" or "clearly different products" — never the
+realistic middle case (a long, mostly-shared name with one differing but
+significant word), which is what actually dominates a real catalog. A
+handful of examples can't reveal a scorer's systematic bias; only
+running against real, full-scale data did.
+
+**Fix:** Switched to `token_sort_ratio` (order-independent but sensitive
+to extra/missing words, unlike set_ratio's subset-tolerance). That alone
+cut the false-merge rate from 1,822/7,353 to ~600/7,353. The remaining
+cases were long near-identical names differing in exactly one embedded
+number (fat %, diaper/shoe size, candle/balloon number) — diluted below
+the threshold by the surrounding shared text. Added an explicit guard:
+reject a match if the leftover embedded numbers (after size-stripping)
+differ at all, regardless of text score. Verified the threshold itself
+has no better setting — measured that legitimate cross-chain matches
+(different unit abbreviation, punctuation) score as low as 87.8, which
+overlaps the residual false positives' 90.2–92.7 range, so raising the
+threshold trades one error type for the other rather than fixing it.
+
+**Lesson:** A fuzzy/heuristic matcher's hand-picked test cases can look
+perfect while hiding a systematic bias that only shows up at real scale
+and real data density. Before trusting a similarity scorer's behavior,
+run it against the full real dataset (or as much of it as available) and
+inspect the highest-count/most-confident groupings by hand — that's
+where a systematic bias concentrates and becomes obvious, not in curated
+examples.
+
+---
+
 ## 2026-08-13 — string replace mangled a literal period in a unit suffix
 
 **Where:** `price_utils.py`, `format_normalized_price`

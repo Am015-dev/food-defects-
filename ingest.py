@@ -13,7 +13,7 @@ runner with its own RAM rather than the memory-constrained web service.
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-from db import ItemPrice, SessionLocal, Shop, Snapshot, init_db
+from db import ItemPrice, ProductListing, SessionLocal, Shop, Snapshot, init_db
 from efood_client import fetch_restaurant
 from price_analysis import (
     find_placeholder_reference_price_bugs,
@@ -23,6 +23,7 @@ from price_analysis import (
     load_items,
 )
 from price_utils import derive_unit_price, fold_name
+from product_matching import match_or_create_product
 from shops import SHOPS
 
 MAX_CONCURRENCY = 2  # how many shops to fetch+store at once
@@ -68,7 +69,22 @@ def store_snapshot(session, shop_id, label, today, data):
     session.add(snapshot)
     session.flush()  # assigns snapshot.id
 
+    # One query for this shop's whole (code -> product_id) cache, instead
+    # of a per-item lookup -- see product_matching.py. Only genuinely new
+    # codes (not in this map) pay the matching cost below.
+    known_product_id_by_code = dict(
+        session.query(ProductListing.code, ProductListing.product_id).filter(
+            ProductListing.shop_id == shop_id
+        )
+    )
+    # Candidate products considered during this call, keyed by top-level
+    # category -- lazily filled and grown in place by match_or_create_product
+    # so a product created earlier in this same run can still be matched
+    # against by a later item, without a fresh DB round-trip each time.
+    block_cache = {}
+
     rows = []
+    new_listings = []
     for it in items:
         price = it.get("price")
         size_info = it.get("size_info")
@@ -78,11 +94,30 @@ def store_snapshot(session, shop_id, label, today, data):
         # /search sort by, and display already derives its own unit
         # label independently (see get_price_comparison_info).
         unit_price, _unit_kind = derive_unit_price(price, size_info, metric_unit_description)
+
+        code = it.get("code")
+        product_id = known_product_id_by_code.get(code) if code else None
+        if code and product_id is None:
+            product_id, confidence = match_or_create_product(
+                session, it["name"], it["_category"], block_cache
+            )
+            new_listings.append(
+                ProductListing(
+                    shop_id=shop_id,
+                    code=code,
+                    product_id=product_id,
+                    match_confidence=confidence,
+                    first_seen_name=it["name"],
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+            known_product_id_by_code[code] = product_id
+
         rows.append(
             ItemPrice(
                 snapshot_id=snapshot.id,
                 item_id=it["id"],
-                code=it.get("code"),
+                code=code,
                 name=it["name"],
                 name_fold=fold_name(it["name"]),
                 category=it["_category"],
@@ -92,6 +127,7 @@ def store_snapshot(session, shop_id, label, today, data):
                 size_info=size_info,
                 metric_unit_description=metric_unit_description,
                 unit_price=unit_price,
+                product_id=product_id,
                 is_zero_price_bug=it["id"] in zero_bug_ids,
                 is_placeholder_bug=it["id"] in placeholder_bug_ids,
                 is_verified_deal=it["id"] in deal_pct_by_id,
@@ -99,6 +135,8 @@ def store_snapshot(session, shop_id, label, today, data):
             )
         )
     session.bulk_save_objects(rows)
+    if new_listings:
+        session.bulk_save_objects(new_listings)
     session.commit()
     return len(rows)
 

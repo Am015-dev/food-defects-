@@ -80,12 +80,44 @@ class ItemPrice(Base):
     metric_unit_description = Column(String)  # e-food's own unit price, e.g. "3,36€ / kg"
     unit_price = Column(Float)  # parsed from metric_unit_description (or size_info fallback)
     name_fold = Column(String)  # accent-stripped, casefolded name, for search
+    product_id = Column(Integer)  # denormalized from ProductListing at ingest time, see product_matching.py
     is_zero_price_bug = Column(Boolean, default=False)
     is_placeholder_bug = Column(Boolean, default=False)
     is_verified_deal = Column(Boolean, default=False)
     deal_pct = Column(Float, nullable=True)
 
     snapshot = relationship("Snapshot", back_populates="item_prices")
+
+
+class Product(Base):
+    """One real-world product, matched across shops/chains by
+    product_matching.py. canonical_name is just the name of whichever
+    listing first created it -- a display label, not authoritative."""
+
+    __tablename__ = "products"
+
+    id = Column(Integer, primary_key=True)
+    canonical_name = Column(String, nullable=False)
+    category = Column(String)  # top-level group, e.g. "Τρόφιμα"
+    created_at = Column(DateTime, nullable=False)
+
+
+class ProductListing(Base):
+    """Stable (shop_id, code) -> Product cache. Written once, the first
+    time a listing is seen, so later ingests look this up instead of
+    re-matching -- see product_matching.py and ingest.py."""
+
+    __tablename__ = "product_listings"
+
+    id = Column(Integer, primary_key=True)
+    shop_id = Column(Integer, ForeignKey("shops.id"), nullable=False)
+    code = Column(String, nullable=False)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    match_confidence = Column(Float)  # 1.0 = created a new product, else the fuzzy match score / 100
+    first_seen_name = Column(String, nullable=False)
+    created_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (UniqueConstraint("shop_id", "code", name="uq_shop_code"),)
 
 
 def _add_missing_columns():
@@ -107,6 +139,7 @@ def _add_missing_columns():
         "metric_unit_description": "VARCHAR",
         "unit_price": "FLOAT",
         "name_fold": "VARCHAR",
+        "product_id": "INTEGER",
     }
     for name, sql_type in new_columns.items():
         if name not in existing:
@@ -157,6 +190,8 @@ def _ensure_indexes():
         # fallback search, both of which filter by code across all of a
         # shop's history -- without this they full-scan item_prices.
         "CREATE INDEX IF NOT EXISTS ix_item_prices_code ON item_prices (code)",
+        # compare_across_shops groups by product_id -- see product_matching.py.
+        "CREATE INDEX IF NOT EXISTS ix_item_prices_product ON item_prices (product_id)",
     ]
     with engine.begin() as conn:
         for statement in statements:

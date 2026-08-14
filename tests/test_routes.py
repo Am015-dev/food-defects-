@@ -261,6 +261,37 @@ def test_compare_shows_cross_shop_spread(client, seeded):
     assert "1,68" in body or "1,68 €" in body
 
 
+def test_compare_groups_differently_phrased_names_across_chains(client):
+    # Regression for the product identity layer: two different chains
+    # phrasing the same product differently (word order, size format)
+    # must still land in one comparison group -- the old exact-name
+    # matching would have missed this entirely.
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            TODAY,
+            _catalog([_item(1, "Anatoli Κουρκουμάς 60g", 1.50)]),
+        )
+        store_snapshot(
+            session,
+            SHOP_B,
+            SHOP_B_LABEL,
+            TODAY,
+            _catalog([_item(2, "Κουρκουμάς Anatoli 100g", 1.90)]),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    resp = client.get("/compare")
+    body = resp.get_data(as_text=True)
+    assert "Anatoli Κουρκουμάς 60g" in body
+    assert SHOP_A_LABEL in body and SHOP_B_LABEL in body
+
+
 def test_compare_guards_unfiltered_scan_past_threshold(client, seeded, monkeypatch):
     # The seeded fixture stores 5 priced rows total -- well under any
     # real threshold, so drop it low enough to force the guard on.

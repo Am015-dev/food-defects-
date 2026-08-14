@@ -821,12 +821,15 @@ def verify_item(shop_id, code):
                         break
         history_rows = get_item_history_by_code(session, shop_id, code)
 
-        # Get this product's price across all shops for comparison
+        # Get this product's price across all shops for comparison --
+        # matched by product identity (product_matching.py), not just an
+        # exact name string, so this also finds it under a different
+        # chain's own phrasing of the same product.
         shop_comparison = []
-        if stored and stored.name:
+        if stored and stored.product_id:
             try:
                 shop_comparison = get_product_across_shops(
-                    session, stored.name, SHOP_LABELS, exclude_shop_id=shop_id
+                    session, stored.product_id, SHOP_LABELS, exclude_shop_id=shop_id
                 )
                 _enrich_with_comparison_info(shop_comparison)
             except Exception:  # noqa: BLE001
