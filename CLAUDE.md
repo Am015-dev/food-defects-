@@ -21,6 +21,10 @@ setup missteps), each with root cause, fix, and the general lesson.
   field set here per the 2026-08-13 Jinja Undefined entry") so the
   connection is visible, not silent.
 
+## Communication style
+
+Use ASD-STE-100 when you speak to the operator.
+
 ## Project overview
 
 See `README.md` for architecture, local setup, deployment, and scope.
