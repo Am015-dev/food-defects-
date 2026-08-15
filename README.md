@@ -21,10 +21,25 @@ Beyond bug-hunting, it's also a small price-comparison tool:
 
 - **`/search`** — full-catalog search across every tracked shop, sortable
   by price, by unit price, or alphabetically.
+- **`/category/<name>`** — browse everything currently priced in one
+  top-level category group, with a trend chart of that category's
+  average price over time.
 - **`/compare`** — the same product at different prices across shops,
   with unit-price normalization so a 500g jar and a 1kg jar of the same
   thing compare fairly.
+- **`/basket`** — paste a shopping list and see each shop's running
+  total for what it stocks, plus the cheapest possible total buying
+  each line at whichever shop has it cheapest.
 - **`/drops`** — products that got cheaper since the previous snapshot.
+- **`/extremes`** — currently-listed products ranked by how much their
+  price has swung (lowest to highest) over the retained history.
+- **`/matches`** — manual review queue for low-confidence cross-shop
+  product matches, for spot-checking the fuzzy matcher.
+- **`/feed.xml`** — RSS feed of verified deals newly on offer as of the
+  latest snapshot.
+- CSV exports (`/download/sales.csv`, `/download/bugs.csv`,
+  `/download/drops.csv`) — filtered by whatever shop/search/category the
+  current view is showing.
 
 Every product page also links back to e-food's own live API response, so
 any finding can be checked against the source directly.
@@ -42,6 +57,7 @@ db.py            -- SQLAlchemy models (Postgres in prod, SQLite locally)
 queries.py       -- all read-side queries, kept column-only / LIMIT'd
 webapp.py        -- Flask routes; templates/ + static/ hold the UI
 retention.py     -- prunes item_prices rows past 90 days
+product_matching.py -- fuzzy cross-shop product identity (rapidfuzz)
 notify.py        -- optional email digest of current bugs (SMTP),
                      plus the ingest-failure alert
 shops.py         -- the list of tracked shops (id, label, e-food slug)
@@ -56,6 +72,14 @@ risking an OOM kill. Ingestion instead runs daily on a GitHub Actions
 runner (`.github/workflows/daily-ingest.yml`, plenty of RAM) and writes
 straight to the production Postgres database. The web app only ever
 reads small, filtered, paginated slices of that data.
+
+**Nightly rollups**: `/extremes` and `/category/<name>`'s trend chart
+both read small precomputed tables (`price_extremes`,
+`category_daily_summaries`) instead of aggregating full price history on
+every request. Both are populated once per ingest run, after every
+shop's snapshot for the day is written (`ingest.update_price_extremes_rollup`,
+`ingest.update_category_daily_summary`) -- the same reasoning as the
+ingest/web split above, just applied to aggregation instead of fetching.
 
 **Price normalization**: e-food publishes its own authoritative unit
 price on most items (`metric_unit_description`, e.g. `"3,36€ / kg"`),
@@ -114,8 +138,8 @@ gpg --batch --yes --decrypt --passphrase-fd 0 \
 pg_restore --clean --if-exists -d "$DATABASE_URL" food_defects_backup.dump
 ```
 Old per-item rows are also pruned after 90 days (`retention.py`) to stay
-within the free tier's 1GB limit; the small per-day summary rows are
-kept forever.
+within the free tier's 1GB limit; the small per-day summary rows
+(`snapshots`, `category_daily_summaries`) are kept forever.
 
 ## Adding a shop
 
