@@ -16,6 +16,8 @@
   --warn-bg: #2a2015;
   --good: #4ade80;
   --good-bg: #12261a;
+  --great: #ffd166;
+  --great-bg: #2a2210;
   /* Chart steps of the badge hues, validated on --panel (see charts.py). */
   --chart-red: #e66767;
   --chart-green: #199e70;
@@ -203,6 +205,7 @@ main {
 .badge.bad { background: var(--bad-bg); color: var(--bad); }
 .badge.warn { background: var(--warn-bg); color: var(--warn); }
 .badge.good { background: var(--good-bg); color: var(--good); }
+.badge.great { background: var(--great-bg); color: var(--great); }
 
 .source-tag {
   display: inline-block;

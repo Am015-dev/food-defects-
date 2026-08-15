@@ -30,6 +30,7 @@ from efood_client import fetch_menu_item, menu_item_url
 from price_utils import get_price_comparison_info
 from queries import (
     compare_across_shops,
+    deal_tier,
     get_categories,
     get_deals_page,
     get_flagged_items_filtered,
@@ -39,6 +40,7 @@ from queries import (
     get_latest_snapshots_for_all_shops,
     get_price_drops,
     get_product_across_shops,
+    get_shop_bug_rates,
     get_trend,
     iter_all_sales,
     search_products,
@@ -418,6 +420,12 @@ def dashboard():
             bargains, total_deals = [], 0
         trend_rows = get_trend(session)
         price_drops, _ = get_price_drops(session, SHOP_LABELS, page=1, per_page=5, latest=latest)
+        # Top shops by bug RATE, not raw count -- pure computation over
+        # the Snapshot rows already fetched above, no extra query. Not
+        # affected by shop_filter/q/bug_type: this is a health overview
+        # of every tracked shop, not filtered content.
+        shop_bug_rates = get_shop_bug_rates(latest, SHOP_LABELS, min_items=20)
+        bug_leaderboard = [r for r in shop_bug_rates if r["bug_count"]][:5]
     finally:
         session.close()
 
@@ -468,6 +476,7 @@ def dashboard():
         total_items=total_items,
         total_bugs=total_bugs,
         price_drops=price_drops,
+        bug_leaderboard=bug_leaderboard,
         refresh=refresh_status(),
         trend_charts=build_counts_charts(trend_rows),
         trend_days=len(trend_rows),
@@ -662,6 +671,7 @@ def drops():
     shop_filter = _valid_shop_id()
     category = _parse_category()
     q = _parse_q()
+    min_drop_pct = request.args.get("min_drop_pct", type=float)
     page = max(1, request.args.get("page", default=1, type=int))
     per_page = 50
 
@@ -675,6 +685,7 @@ def drops():
             shop_id=shop_filter,
             q=q,
             category=category,
+            min_drop_pct=min_drop_pct,
             page=page,
             per_page=per_page,
             latest=latest,
@@ -695,6 +706,7 @@ def drops():
         shop_filter=shop_filter,
         category=category,
         q=q,
+        min_drop_pct=min_drop_pct,
     )
 
 
@@ -904,6 +916,11 @@ def verify_item(shop_id, code):
                         snapshot_date = snap.snapshot_date
                         break
         history_rows = get_item_history_by_code(session, shop_id, code)
+        # Zero/missing prices are bugs, not real prices -- excluded so a
+        # 0.00 EUR glitch day can't masquerade as the "all-time low".
+        real_prices = [p for _, p, _ in history_rows if p and p > 0]
+        all_time_low = min(real_prices) if len(real_prices) >= 2 else None
+        all_time_high = max(real_prices) if len(real_prices) >= 2 else None
 
         # Get this product's price across all shops for comparison --
         # matched by product identity (product_matching.py), not just an
@@ -975,15 +992,20 @@ def verify_item(shop_id, code):
     except Exception as exc:  # noqa: BLE001
         live_error = _friendly_live_error(exc)
 
+    stored_deal_tier = deal_tier(stored.deal_pct) if stored is not None and stored.deal_pct else None
+
     return render_template(
         "verify.html",
         code=code,
         shop_id=shop_id,
         stored=stored,
+        stored_deal_tier=stored_deal_tier,
         snapshot_date=snapshot_date,
         shop_label=SHOP_LABELS[shop_id],
         shop_url=SHOP_URLS.get(shop_id, "https://www.e-food.gr/"),
         api_url=menu_item_url(shop_id, code),
+        all_time_low=all_time_low,
+        all_time_high=all_time_high,
         live=live,
         live_l30d=live_l30d,
         live_error=live_error,
@@ -1027,6 +1049,16 @@ def healthz():
         return {"status": "error"}, 503
     finally:
         session.close()
+
+
+@app.errorhandler(404)
+def not_found(_error):
+    return render_template("404.html"), 404
+
+
+@app.errorhandler(500)
+def server_error(_error):
+    return render_template("500.html"), 500
 
 
 if __name__ == "__main__":

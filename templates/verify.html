@@ -6,7 +6,8 @@
 <div class="page-head verify-head">
   {{ thumb(shop_id, code, 80, 160) }}
   <div>
-    <h1>{{ stored.name if stored else (live.name if live else "Προϊόν") }}</h1>
+    <h1>{{ stored.name if stored else (live.name if live else "Προϊόν") }}
+      {% if stored_deal_tier == 'great' %}<span class="badge great">ΣΠΟΥΔΑΙΑ ΠΡΟΣΦΟΡΑ</span>{% elif stored_deal_tier == 'good' %}<span class="badge good">ΠΡΟΣΦΟΡΑ</span>{% endif %}</h1>
     <p class="sub">{{ shop_label }}{% if stored %} · {{ stored.category }}{% elif live.category %} · {{ live.category }}{% endif %}</p>
   </div>
 </div>
@@ -58,6 +59,12 @@
   {% if price_chart %}
   <div class="section">
     <h3>Ιστορικό τιμής</h3>
+    {% if all_time_low or all_time_high %}
+    <p class="meta">
+      {% if all_time_low %}Χαμηλότερη τιμή ποτέ: <span class="price-now">{{ all_time_low|eur }}</span>{% endif %}
+      {% if all_time_high %} · Υψηλότερη τιμή ποτέ: <span class="num">{{ all_time_high|eur }}</span>{% endif %}
+    </p>
+    {% endif %}
     <div class="chart-block">{{ price_chart|safe }}</div>
   </div>
   {% elif history_points == 1 %}

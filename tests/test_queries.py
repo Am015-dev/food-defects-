@@ -7,7 +7,13 @@ import pytest
 
 from db import SessionLocal
 from ingest import store_snapshot
-from queries import compare_across_shops, get_price_drops, get_product_across_shops, search_products
+from queries import (
+    compare_across_shops,
+    deal_tier,
+    get_price_drops,
+    get_product_across_shops,
+    search_products,
+)
 from shops import SHOPS
 
 SHOP_A = SHOPS[0]["id"]
@@ -79,6 +85,32 @@ def test_get_price_drops_finds_real_code_matched_drop():
         assert total == 1
         assert rows[0]["name"] == "Milk"
         assert rows[0]["drop_pct"] == pytest.approx(25.0)
+    finally:
+        session.close()
+
+
+def test_get_price_drops_min_drop_pct_excludes_smaller_drops():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-12",
+            _catalog([{"id": 1, "code": "c1", "name": "Milk", "price": 2.0, "tags": []}]),
+        )
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog([{"id": 1, "code": "c1", "name": "Milk", "price": 1.5, "tags": []}]),
+        )
+        # 25% drop -- a 30% floor must exclude it, a 20% floor must not.
+        _, total_high = get_price_drops(session, {SHOP_A: SHOP_A_LABEL}, min_drop_pct=30)
+        assert total_high == 0
+        _, total_low = get_price_drops(session, {SHOP_A: SHOP_A_LABEL}, min_drop_pct=20)
+        assert total_low == 1
     finally:
         session.close()
 
@@ -331,5 +363,77 @@ def test_get_product_across_shops_accepts_prefetched_latest():
         )
         assert len(results) == 1
         assert results[0]["shop_id"] == SHOP_B
+    finally:
+        session.close()
+
+
+# ---------- deal_tier ----------
+
+
+def test_deal_tier_none_pct():
+    assert deal_tier(None) is None
+
+
+def test_deal_tier_at_verified_deal_floor_is_good():
+    # 20% is the floor find_verified_deep_discounts already enforces --
+    # every real verified deal is at least this, and the "great" tier
+    # only distinguishes an exceptional one from a merely-real one.
+    assert deal_tier(20.0) == "good"
+
+
+def test_deal_tier_below_great_threshold_is_good():
+    assert deal_tier(34.9) == "good"
+
+
+def test_deal_tier_at_great_threshold_is_great():
+    assert deal_tier(35.0) == "great"
+
+
+def test_deal_tier_well_above_threshold_is_great():
+    assert deal_tier(60.0) == "great"
+
+
+# ---------- get_shop_bug_rates ----------
+
+
+def test_get_shop_bug_rates_ranks_by_rate_not_raw_count():
+    # Shop A: 40 items, 2 bugs -> 5% rate. Shop B: 20 items, 3 bugs -> 15%
+    # rate. Shop B has fewer raw bugs but the higher rate must rank first.
+    session = SessionLocal()
+    try:
+        a_items = [_item(i, f"A Item {i:02d}", 1.0) for i in range(38)]
+        a_items += [_item(90, "A Bug 1", 0.0), _item(91, "A Bug 2", 0.0)]
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-13", _catalog(a_items))
+
+        b_items = [_item(i, f"B Item {i:02d}", 1.0) for i in range(17)]
+        b_items += [_item(90, "B Bug 1", 0.0), _item(91, "B Bug 2", 0.0), _item(92, "B Bug 3", 0.0)]
+        store_snapshot(session, SHOP_B, SHOP_B_LABEL, "2026-08-13", _catalog(b_items))
+        session.commit()
+
+        from queries import get_latest_snapshots_for_all_shops, get_shop_bug_rates
+
+        shop_labels = {SHOP_A: SHOP_A_LABEL, SHOP_B: SHOP_B_LABEL}
+        latest = get_latest_snapshots_for_all_shops(session, list(shop_labels))
+        rows = get_shop_bug_rates(latest, shop_labels, min_items=20)
+        assert [r["shop_id"] for r in rows] == [SHOP_B, SHOP_A]
+        assert rows[0]["bug_rate"] == pytest.approx(0.15)
+        assert rows[1]["bug_rate"] == pytest.approx(0.05)
+    finally:
+        session.close()
+
+
+def test_get_shop_bug_rates_excludes_shops_below_min_items():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session, SHOP_A, SHOP_A_LABEL, "2026-08-13", _catalog([_item(1, "Tiny Bug", 0.0)])
+        )
+        session.commit()
+
+        from queries import get_latest_snapshots_for_all_shops, get_shop_bug_rates
+
+        shop_labels = {SHOP_A: SHOP_A_LABEL}
+        latest = get_latest_snapshots_for_all_shops(session, list(shop_labels))
+        assert get_shop_bug_rates(latest, shop_labels, min_items=20) == []
     finally:
         session.close()

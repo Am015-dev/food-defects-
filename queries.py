@@ -49,7 +49,7 @@ def get_recent_snapshot_pair(session, shop_id):
     return newest, previous
 
 
-def _shop_price_drops_query(session, sid, newest, previous, q=None, category=None):
+def _shop_price_drops_query(session, sid, newest, previous, q=None, category=None, min_drop_pct=None):
     """One shop's self-join between its two most recent snapshots,
     matched by e-food's stable item code (item_id is only unique within
     one shop's own catalog and can be reused for an unrelated product
@@ -84,6 +84,12 @@ def _shop_price_drops_query(session, sid, newest, previous, q=None, category=Non
             ItemPrice.price < Yesterday.price,
         )
     )
+    # Filtered on the raw expression here, before the multi-shop UNION
+    # ALL in get_price_drops -- drop_pct isn't a stored column like
+    # get_deals_page's deal_pct, it only exists as this computed
+    # self-join expression, so it has to be filtered per-shop.
+    if min_drop_pct:
+        query = query.filter(drop_pct >= min_drop_pct)
     return _apply_text_filters(query, q=q, category=category)
 
 
@@ -98,7 +104,15 @@ def _get_previous_snapshot(session, shop_id, before_date):
 
 
 def get_price_drops(
-    session, shop_labels_by_id, shop_id=None, q=None, category=None, page=1, per_page=50, latest=None
+    session,
+    shop_labels_by_id,
+    shop_id=None,
+    q=None,
+    category=None,
+    min_drop_pct=None,
+    page=1,
+    per_page=50,
+    latest=None,
 ):
     """Items whose price fell between a shop's previous snapshot and its
     latest one. Each shop's self-join (see _shop_price_drops_query) is
@@ -127,7 +141,9 @@ def get_price_drops(
         if newest is None or previous is None:
             continue
         per_shop_queries.append(
-            _shop_price_drops_query(session, sid, newest, previous, q=q, category=category)
+            _shop_price_drops_query(
+                session, sid, newest, previous, q=q, category=category, min_drop_pct=min_drop_pct
+            )
         )
 
     if not per_shop_queries:
@@ -295,6 +311,22 @@ def get_categories(session, snapshot_ids):
     return sorted(groups)
 
 
+# Every verified deal already clears find_verified_deep_discounts' 20%
+# floor (price_analysis.py) before it's stored as is_verified_deal, so
+# this only distinguishes an already-verified deal from an exceptional
+# one -- it's presentation-only, not a re-verification of anything.
+GREAT_DEAL_THRESHOLD_PCT = 35
+
+
+def deal_tier(pct):
+    """'great' or 'good' badge tier for a verified deal's discount size,
+    or None if pct is missing (shouldn't happen for a real verified
+    deal, but callers may pass a possibly-null column value)."""
+    if pct is None:
+        return None
+    return "great" if pct >= GREAT_DEAL_THRESHOLD_PCT else "good"
+
+
 def get_deals_page(
     session,
     shop_labels_by_id,
@@ -374,6 +406,7 @@ def get_deals_page(
                 "price": price,
                 "full_price": full_price,
                 "pct": pct,
+                "tier": deal_tier(pct),
                 "unit_price": unit_price,
                 "snapshot_date": snapshot_date,
             }
@@ -436,6 +469,37 @@ def get_latest_snapshots_for_all_shops(session, shop_ids):
         if snap is not None:
             latest[shop_id] = snap
     return latest
+
+
+def get_shop_bug_rates(latest, shop_labels_by_id, min_items=1):
+    """Shops ranked by bug rate -- (zero-price + placeholder bugs) as a
+    fraction of that shop's own catalog size -- rather than raw count,
+    since a 13-item shop's 2 bugs isn't comparable to a 9,000-item
+    shop's 40. Pure computation over Snapshot rows the caller already
+    fetched (see get_latest_snapshots_for_all_shops): those bug/item
+    counts are written once per shop per day at ingest time
+    (ingest.py: store_snapshot), so this needs no query at all.
+
+    min_items excludes shops whose catalog is too small for a rate to
+    be meaningful (e.g. a brand-new shop with a handful of items).
+    """
+    rows = []
+    for shop_id, snap in latest.items():
+        total = snap.total_items or 0
+        if total < min_items:
+            continue
+        bug_count = (snap.zero_price_bug_count or 0) + (snap.placeholder_bug_count or 0)
+        rows.append(
+            {
+                "shop_id": shop_id,
+                "shop_label": shop_labels_by_id.get(shop_id, "Unknown"),
+                "bug_count": bug_count,
+                "total_items": total,
+                "bug_rate": bug_count / total,
+            }
+        )
+    rows.sort(key=lambda r: r["bug_rate"], reverse=True)
+    return rows
 
 
 def search_products(

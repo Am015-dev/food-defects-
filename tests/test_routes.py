@@ -15,6 +15,8 @@ from shops import SHOPS
 # every test -- this reference is unaffected by that patch, so tests
 # that need the real logic can call it directly.
 from webapp import _shops_needing_refresh as _real_shops_needing_refresh
+from webapp import app as flask_app
+from webapp import server_error
 
 SHOP_A = SHOPS[0]["id"]
 SHOP_A_LABEL = SHOPS[0]["label"]
@@ -169,6 +171,25 @@ def test_robots_txt(client):
     assert b"Disallow: /compare" in resp.data
 
 
+def test_404_page_is_themed(client):
+    resp = client.get("/shop/999999")
+    assert resp.status_code == 404
+    body = resp.get_data(as_text=True)
+    assert "404" in body
+    assert "Πίνακας" in body  # base.html nav present, not Werkzeug's default page
+
+
+def test_500_page_is_themed():
+    # Flask's TESTING=True makes real requests propagate exceptions
+    # instead of hitting the errorhandler, so this calls the handler
+    # directly rather than triggering a real unhandled exception.
+    with flask_app.test_request_context():
+        body, status = server_error(Exception("simulated failure"))
+        assert status == 500
+        assert "500" in body
+        assert "Πίνακας" in body
+
+
 def test_dashboard_empty(client):
     resp = client.get("/")
     assert resp.status_code == 200
@@ -246,6 +267,13 @@ def test_dashboard_type_zero_filter_hides_bargains_panel(client, seeded):
 def test_deals_filters(client, seeded, params):
     resp = client.get("/deals", query_string=params)
     assert resp.status_code == 200
+
+
+def test_deals_shows_great_tier_badge_for_40_pct_discount(client, seeded):
+    # Seeded "Πραγματική Προσφορά" is 3.0 vs a 5.0 30-day low = 40% off,
+    # which clears the 35% "great" tier threshold.
+    body = client.get("/deals").get_data(as_text=True)
+    assert "ΣΠΟΥΔΑΙΑ" in body
 
 
 def test_deals_out_of_range_page_shows_real_rows_not_empty(client, seeded):
@@ -434,6 +462,17 @@ def test_drops_finds_the_drop_but_not_the_steady_price(client, seeded_with_drop)
     assert DROP_PRODUCT in body
     assert STEADY_PRODUCT not in body
     assert "-25%" in body  # (10.0 - 7.5) / 10.0 * 100
+
+
+def test_drops_min_drop_pct_filters_out_smaller_drops(client, seeded_with_drop):
+    # DROP_PRODUCT fell 25% -- a 30%+ floor must exclude it.
+    body = client.get("/drops", query_string={"min_drop_pct": "30"}).get_data(as_text=True)
+    assert DROP_PRODUCT not in body
+
+
+def test_drops_min_drop_pct_keeps_matching_drops(client, seeded_with_drop):
+    body = client.get("/drops", query_string={"min_drop_pct": "20"}).get_data(as_text=True)
+    assert DROP_PRODUCT in body
 
 
 def test_drops_empty_without_two_snapshots(client, seeded):
@@ -707,6 +746,70 @@ def test_item_page_live_error_is_plain_language_not_raw_exception(client, seeded
     body = client.get(f"/item/{SHOP_A}/code-1").get_data(as_text=True)
     assert "HTTPSConnectionPool" not in body
     assert "Δεν ήταν δυνατή η ζωντανή επαλήθευση" in body
+
+
+def test_item_page_shows_great_deal_badge(client, seeded, monkeypatch):
+    # code-4 is the seeded "Πραγματική Προσφορά" (3.0 vs a 5.0 30-day low
+    # = 40% off), which clears the 35% "great" tier threshold.
+    monkeypatch.setattr(
+        "webapp.fetch_menu_item",
+        lambda shop_id, code, timeout=20: {
+            "price": 3.0,
+            "full_price": 6.0,
+            "calculated_price": None,
+            "is_available": True,
+            "tags": [],
+        },
+    )
+    body = client.get(f"/item/{SHOP_A}/code-4").get_data(as_text=True)
+    assert "ΣΠΟΥΔΑΙΑ ΠΡΟΣΦΟΡΑ" in body
+
+
+def test_item_page_shows_all_time_low_high_from_history(client, monkeypatch):
+    session = SessionLocal()
+    try:
+        for date_, price in [("2026-08-10", 2.00), ("2026-08-11", 1.00), ("2026-08-12", 3.00)]:
+            store_snapshot(
+                session,
+                SHOP_A,
+                SHOP_A_LABEL,
+                date_,
+                _catalog([_item(1, "Ιστορικό Προϊόν", price)]),
+            )
+        session.commit()
+    finally:
+        session.close()
+
+    monkeypatch.setattr(
+        "webapp.fetch_menu_item",
+        lambda shop_id, code, timeout=20: {
+            "price": 3.0,
+            "full_price": None,
+            "calculated_price": None,
+            "is_available": True,
+            "tags": [],
+        },
+    )
+    body = client.get(f"/item/{SHOP_A}/code-1").get_data(as_text=True)
+    assert "Χαμηλότερη τιμή ποτέ" in body
+    assert "1,00 €" in body  # the real all-time low
+    assert "Υψηλότερη τιμή ποτέ" in body
+    assert "3,00 €" in body  # the real all-time high
+
+
+def test_item_page_no_all_time_badge_with_single_snapshot(client, seeded, monkeypatch):
+    monkeypatch.setattr(
+        "webapp.fetch_menu_item",
+        lambda shop_id, code, timeout=20: {
+            "price": 1.68,
+            "full_price": None,
+            "calculated_price": None,
+            "is_available": True,
+            "tags": [],
+        },
+    )
+    body = client.get(f"/item/{SHOP_A}/code-1").get_data(as_text=True)
+    assert "Χαμηλότερη τιμή ποτέ" not in body
 
 
 def test_item_page_live_timeout_gets_specific_message(client, seeded, monkeypatch):

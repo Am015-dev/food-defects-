@@ -62,7 +62,8 @@
           <td data-label="Κατηγορία"><span class="item-cat">{{ d.category }}</span></td>
           <td data-label="Τιμή" class="price-now">{{ d.price|eur }}</td>
           <td data-label="Αρχική" class="price-was">{{ d.full_price|eur }}</td>
-          <td data-label="Έκπτωση" class="pct">-{{ "%.0f"|format(d.pct) }}%</td>
+          <td data-label="Έκπτωση" class="pct">-{{ "%.0f"|format(d.pct) }}%
+            {% if d.tier == 'great' %}<span class="badge great">ΣΠΟΥΔΑΙΑ</span>{% else %}<span class="badge good">ΠΡΟΣΦΟΡΑ</span>{% endif %}</td>
         </tr>
         {% endfor %}
       </tbody>
