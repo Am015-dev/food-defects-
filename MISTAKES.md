@@ -212,3 +212,46 @@ unconfigured first to see what the *real* signal-to-noise ratio is
 before deciding between "fix everything," "adjust the threshold," or
 "suppress the rule" — don't default to the tool's out-of-the-box
 settings without checking they fit the content.
+
+---
+
+## 2026-08-15 — CI was red on every single push for the whole session, unnoticed
+
+**Where:** `pyproject.toml` (pytest config), `.github/workflows/ci.yml`
+
+**What happened:** Every commit pushed to `main` this session failed
+CI's `test` job with `ModuleNotFoundError: No module named 'db'` at
+`tests/conftest.py`'s import line — going back through dozens of
+commits, essentially since automated tests were first added. It went
+unnoticed the entire time because every local verification step in this
+session ran `python3 -m pytest -q`, and reported "N passing" as proof of
+a clean state before every commit and push, without ever checking the
+GitHub Actions run that push actually triggered.
+
+**Root cause:** `python -m pytest` inserts the current working directory
+into `sys.path[0]` for free (a side effect of Python's `-m` flag), which
+let `conftest.py`'s `from db import ...` resolve even though nothing in
+the project put the repo root on the path. CI's workflow invokes the
+bare `pytest` console script instead (`run: pytest -q`) — the same
+command most editors' test integrations and a contributor typing
+`pytest` at a shell would also run — which does not add the cwd to
+`sys.path`, so the exact same import failed there on every run. The two
+invocations only look equivalent; they differ in this one load-bearing
+way for a flat (no `src/`, no package `__init__.py`) repo layout like
+this one.
+
+**Fix:** Added `[tool.pytest.ini_options]` with `pythonpath = ["."]` to
+`pyproject.toml` — the standard pytest fix for a flat layout, and one
+that makes every invocation style (bare `pytest`, `python -m pytest`, an
+IDE's test runner) behave identically, rather than papering over it by
+changing CI's command to match whatever happened to work locally.
+Verified against the literal binary CI resolves (`/usr/local/bin/pytest
+-q`, not the `python3 -m pytest` used everywhere else this session) before
+declaring it fixed.
+
+**Lesson:** "N tests passing locally" is not "CI is green" — they can
+run different commands that resolve `sys.path` differently even from
+the identical repo state. After introducing or relying on a CI workflow,
+periodically check the actual workflow run (or reproduce with the exact
+command the workflow invokes, not an equivalent-looking one) instead of
+treating a local test run as a proxy for it indefinitely.

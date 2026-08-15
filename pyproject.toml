@@ -3,3 +3,12 @@ line-length = 110
 
 [tool.ruff.lint]
 select = ["E", "F", "BLE"]
+
+[tool.pytest.ini_options]
+# Flat repo layout, no src/ dir or package -- `python -m pytest` adds the
+# cwd to sys.path for free, but the bare `pytest` console script (what CI
+# and most editors actually run) does not, so `import db` etc. fails
+# without this. Regression: CI has been red on every push since this
+# project's tests were added, because local runs all used `python3 -m
+# pytest`, silently masking the gap.
+pythonpath = ["."]
