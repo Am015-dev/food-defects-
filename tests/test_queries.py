@@ -10,6 +10,7 @@ from ingest import store_snapshot
 from queries import (
     compare_across_shops,
     deal_tier,
+    get_category_page,
     get_price_drops,
     get_product_across_shops,
     iter_all_bugs,
@@ -736,5 +737,80 @@ def test_iter_all_drops_min_drop_pct_excludes_smaller_drops():
 
         rows = list(iter_all_drops(session, {SHOP_A: SHOP_A_LABEL}, min_drop_pct=50.0))
         assert rows == []
+    finally:
+        session.close()
+
+
+def test_get_category_page_requires_a_category():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog([{"id": 1, "code": "c1", "name": "Item", "price": 1.0, "tags": []}]),
+        )
+        session.commit()
+
+        rows, total = get_category_page(session, {SHOP_A: SHOP_A_LABEL}, None)
+        assert (rows, total) == ([], 0)
+    finally:
+        session.close()
+
+
+def test_get_category_page_matches_top_level_group_prefix():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            {
+                "information": {"title": "T", "address": {"description": "A"}, "is_open": True},
+                "menu": {
+                    "categories": [
+                        {
+                            "name": "Τρόφιμα || Ζυμαρικά",
+                            "items": [{"id": 1, "code": "c1", "name": "Pasta", "price": 1.0, "tags": []}],
+                        },
+                        {
+                            "name": "Καθαριότητα || Απορρυπαντικά",
+                            "items": [{"id": 2, "code": "c2", "name": "Soap", "price": 2.0, "tags": []}],
+                        },
+                    ]
+                },
+            },
+        )
+        session.commit()
+
+        rows, total = get_category_page(session, {SHOP_A: SHOP_A_LABEL}, "Τρόφιμα")
+        assert total == 1
+        assert rows[0]["name"] == "Pasta"
+    finally:
+        session.close()
+
+
+def test_get_category_page_optional_q_narrows_further():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    {"id": 1, "code": "c1", "name": "Milk", "price": 1.0, "tags": []},
+                    {"id": 2, "code": "c2", "name": "Bread", "price": 2.0, "tags": []},
+                ]
+            ),
+        )
+        session.commit()
+
+        rows, total = get_category_page(session, {SHOP_A: SHOP_A_LABEL}, "Cat", q="Milk")
+        assert total == 1
+        assert rows[0]["name"] == "Milk"
     finally:
         session.close()

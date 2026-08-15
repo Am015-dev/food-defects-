@@ -524,6 +524,44 @@ def test_search_out_of_range_page_shows_real_rows_not_empty(client, seeded):
     assert "Κανένα αποτέλεσμα" not in body
 
 
+def test_category_browse_lists_products_without_a_search_term(client, seeded):
+    # Unlike /search, /category needs no q -- the category itself bounds
+    # the scan (seeded's items are all under "Τρόφιμα || Δοκιμαστικά").
+    resp = client.get("/category/Τρόφιμα")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert COMMON_PRODUCT in body
+
+
+def test_category_browse_unknown_category_is_empty_not_500(client, seeded):
+    resp = client.get("/category/Δεν%20υπάρχει")
+    assert resp.status_code == 200
+    assert "Κανένα προϊόν" in resp.get_data(as_text=True)
+
+
+def test_category_browse_filters_by_shop_and_q(client, seeded):
+    # "Μηδενική Τιμή" only exists in shop A's seeded catalog -- filtering
+    # to shop B must exclude it while still showing the shared product.
+    resp = client.get("/category/Τρόφιμα", query_string={"shop": str(SHOP_B)})
+    body = resp.get_data(as_text=True)
+    assert "Μηδενική Τιμή" not in body
+    assert COMMON_PRODUCT in body
+
+    resp = client.get("/category/Τρόφιμα", query_string={"q": "nothing matches this"})
+    assert COMMON_PRODUCT not in resp.get_data(as_text=True)
+
+
+def test_category_browse_out_of_range_page_shows_real_rows_not_empty(client, seeded):
+    resp = client.get("/category/Τρόφιμα", query_string={"page": "999"})
+    assert resp.status_code == 200
+    assert COMMON_PRODUCT in resp.get_data(as_text=True)
+
+
+def test_deals_category_link_points_at_category_browse(client, seeded):
+    body = client.get("/deals").get_data(as_text=True)
+    assert "/category/" in body
+
+
 @pytest.mark.parametrize(
     "params",
     [

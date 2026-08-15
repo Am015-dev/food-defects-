@@ -52,7 +52,7 @@
         <tr>
           <td class="td-main">{{ thumb(d.shop_id, d.code, 36, 72) }}{% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
           <td data-label="Κατάστημα"><span class="item-cat">{{ d.shop_label }}</span></td>
-          <td data-label="Κατηγορία"><span class="item-cat">{{ d.category }}</span></td>
+          <td data-label="Κατηγορία"><a class="item-cat" href="{{ url_for('category_browse', name=d.category.split(' || ')[0]) }}">{{ d.category }}</a></td>
           <td data-label="Τώρα" class="price-now">{{ d.price|eur }}</td>
           <td data-label="Πριν" class="price-was">{{ d.prev_price|eur }}</td>
           <td data-label="Πτώση" class="pct">-{{ "%.0f"|format(d.drop_pct) }}%</td>

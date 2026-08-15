@@ -40,6 +40,7 @@ from queries import (
     deal_tier,
     get_bug_streaks,
     get_categories,
+    get_category_page,
     get_deals_page,
     get_flagged_items_filtered,
     get_history,
@@ -150,7 +151,10 @@ def inject_globals():
     def page_url(page):
         args = request.args.to_dict()
         args["page"] = page
-        return url_for(request.endpoint, **args)
+        # request.view_args carries path segments (e.g. /category/<name>)
+        # that request.args doesn't -- every existing paginated route has
+        # none, so this is a no-op for them.
+        return url_for(request.endpoint, **(request.view_args or {}), **args)
 
     session = SessionLocal()
     try:
@@ -757,6 +761,55 @@ def search():
         q=q,
         shop_filter=shop_filter,
         category=category,
+        sort=sort,
+    )
+
+
+@app.route("/category/<name>")
+def category_browse(name):
+    """Browse the full catalog within one top-level category group --
+    reached by clicking a category chip anywhere else on the site,
+    rather than typing a search term. The category itself bounds the
+    scan the same way a search term does for /search."""
+    shop_filter = _valid_shop_id()
+    q = _parse_q()
+    sort = request.args.get("sort") or "price"
+    if sort not in ("price", "unit_price", "name"):
+        sort = "price"
+    page = max(1, request.args.get("page", default=1, type=int))
+    per_page = 50
+
+    session = SessionLocal()
+    try:
+        latest = get_latest_snapshots_for_all_shops(session, list(SHOP_LABELS))
+        categories = get_categories(session, [s.id for s in latest.values()])
+        rows, total = get_category_page(
+            session,
+            SHOP_LABELS,
+            name,
+            shop_id=shop_filter,
+            q=q,
+            sort=sort,
+            page=page,
+            per_page=per_page,
+            latest=latest,
+        )
+    finally:
+        session.close()
+
+    _enrich_with_comparison_info(rows)
+
+    pages = max(1, math.ceil(total / per_page))
+    return render_template(
+        "category.html",
+        category=name,
+        rows=rows,
+        total=total,
+        page=min(page, pages),
+        pages=pages,
+        categories=categories,
+        q=q,
+        shop_filter=shop_filter,
         sort=sort,
     )
 

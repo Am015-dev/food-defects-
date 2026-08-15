@@ -601,33 +601,18 @@ def get_low_confidence_matches(session, max_confidence=0.93, limit=50):
     ]
 
 
-def search_products(
-    session,
-    shop_labels_by_id,
-    q,
-    shop_id=None,
-    category=None,
-    sort="price",
-    page=1,
-    per_page=50,
-    latest=None,
-):
-    """Search the full catalog -- not just flagged bug/deal rows -- across
-    the latest snapshot of every tracked shop. q is required: unlike a
-    dashboard that always renders the same small flagged-row set, an
-    open-ended scan of the whole catalog needs a real search term to
-    bound it, so an empty q returns nothing rather than paging through
-    the entire multi-shop inventory.
+def _catalog_scan_page(session, shop_labels_by_id, ids, q, category, sort, page, per_page, latest):
+    """Shared body of search_products and get_category_page: one page of
+    the full catalog (not just flagged bug/deal rows) across the latest
+    snapshot of the given shops, filtered/sorted/paged in SQL. Column-only
+    and LIMIT'd -- at most per_page rows are ever materialized. Callers
+    are responsible for bounding the scan (a required q or category)
+    before calling this -- it applies no guard of its own.
 
     `latest` lets a caller that already ran
-    get_latest_snapshots_for_all_shops (e.g. to build a category list)
-    pass that result straight through instead of this function querying
-    it again from scratch.
+    get_latest_snapshots_for_all_shops pass that result straight through
+    instead of this function querying it again from scratch.
     """
-    if not q:
-        return [], 0
-
-    ids = [shop_id] if shop_id is not None else list(shop_labels_by_id)
     if latest is None:
         latest = get_latest_snapshots_for_all_shops(session, ids)
     else:
@@ -686,6 +671,50 @@ def search_products(
             }
         )
     return results, total
+
+
+def search_products(
+    session,
+    shop_labels_by_id,
+    q,
+    shop_id=None,
+    category=None,
+    sort="price",
+    page=1,
+    per_page=50,
+    latest=None,
+):
+    """Search the full catalog across the latest snapshot of every
+    tracked shop. q is required: unlike a dashboard that always renders
+    the same small flagged-row set, an open-ended scan of the whole
+    catalog needs a real search term to bound it, so an empty q returns
+    nothing rather than paging through the entire multi-shop inventory.
+    """
+    if not q:
+        return [], 0
+    ids = [shop_id] if shop_id is not None else list(shop_labels_by_id)
+    return _catalog_scan_page(session, shop_labels_by_id, ids, q, category, sort, page, per_page, latest)
+
+
+def get_category_page(
+    session,
+    shop_labels_by_id,
+    category,
+    shop_id=None,
+    q=None,
+    sort="price",
+    page=1,
+    per_page=50,
+    latest=None,
+):
+    """One page of everything currently priced in one top-level category
+    group, across the latest snapshot of every tracked shop -- the
+    category-browse equivalent of search_products. category is required:
+    it's the thing bounding this scan, the same role q plays there."""
+    if not category:
+        return [], 0
+    ids = [shop_id] if shop_id is not None else list(shop_labels_by_id)
+    return _catalog_scan_page(session, shop_labels_by_id, ids, q, category, sort, page, per_page, latest)
 
 
 def compare_across_shops(
