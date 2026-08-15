@@ -915,6 +915,47 @@ def test_refresh_post_html_redirects_to_dashboard(client):
     assert resp.headers["Location"] == "/"
 
 
+def test_refresh_and_csv_routes_declare_rate_limits():
+    # Flask-Limiter's Limiter(enabled=False) -- required so the test
+    # suite's own repeated /refresh and /download/sales.csv calls don't
+    # 429 each other (see conftest.py) -- makes init_app() return before
+    # registering anything, including the @limiter.limit(...) decorator's
+    # own bookkeeping: there is no way to introspect the *real* app's
+    # limits once built this way. Assert the decorators are still there
+    # in source instead of at runtime; the mechanism itself is verified
+    # in isolation by the next test.
+    import inspect
+
+    import webapp
+
+    source = inspect.getsource(webapp)
+    assert '@limiter.limit("5 per hour")\ndef refresh():' in source
+    assert '@limiter.limit("20 per hour")\ndef download_sales_csv():' in source
+
+
+def test_flask_limiter_enforces_per_hour_limit():
+    # Proves the "N per hour" mechanism Flask-Limiter applies to
+    # /refresh and /download/sales.csv actually works, using an
+    # isolated throwaway app (Limiter(enabled=True), the real default)
+    # rather than the shared, test-suite-disabled webapp singleton.
+    from flask import Flask
+    from flask_limiter import Limiter
+    from flask_limiter.util import get_remote_address
+
+    app = Flask(__name__)
+    limiter = Limiter(get_remote_address, app=app, storage_uri="memory://", default_limits=[])
+
+    @app.route("/ping")
+    @limiter.limit("5 per hour")
+    def ping():
+        return "ok"
+
+    with app.test_client() as c:
+        for _ in range(5):
+            assert c.get("/ping").status_code == 200
+        assert c.get("/ping").status_code == 429
+
+
 def test_dashboard_stale_banner_absent_for_fresh_data(client, seeded):
     resp = client.get("/")
     body = resp.get_data(as_text=True)

@@ -7,6 +7,7 @@ styles in static/ -- this module is routes and filter parsing only.
 import csv
 import io
 import math
+import os
 import secrets
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -24,7 +25,10 @@ from flask import (
     request,
     url_for,
 )
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from sqlalchemy import func, text
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from charts import line_chart
 from db import ItemPrice, SessionLocal, Snapshot, init_db
@@ -50,6 +54,26 @@ from queries import (
 from shops import SHOP_URLS, SHOPS
 
 app = Flask(__name__)
+# Render sits its own reverse proxy in front of this service -- without
+# ProxyFix, every visitor's X-Forwarded-For would be ignored and
+# get_remote_address (below) would see Render's proxy IP for everyone,
+# making the per-IP rate limits below apply to the whole site at once
+# instead of per visitor. x_for=1 trusts exactly that one hop.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
+
+# In-process memory:// storage -- fine for a single-worker gunicorn
+# instance (render.yaml pins --workers 1) and needs no external service.
+# Disabled under pytest (see tests/conftest.py) so the test suite's own
+# repeated calls to /refresh and /download/sales.csv never 429 each
+# other; a dedicated test re-enables it to check the limiting itself.
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    storage_uri="memory://",
+    default_limits=[],
+    enabled=os.environ.get("DISABLE_RATE_LIMITING") != "1",
+)
+
 try:
     init_db()
 except Exception as exc:  # noqa: BLE001
@@ -788,6 +812,7 @@ def history(shop_id):
 
 
 @app.route("/refresh", methods=["POST"])
+@limiter.limit("5 per hour")
 def refresh():
     """Manually kick off a data refresh for whatever's stale. POST-only so
     a link prefetcher or crawler can't trigger an outbound fetch to every
@@ -795,7 +820,10 @@ def refresh():
     GitHub Actions -- this is a manual escape hatch (e.g. to backfill a
     shop that failed overnight), reachable both as a plain HTML form
     submit (the dashboard's "Ανανέωση τώρα" button, no JS required) and
-    as a JSON API for progress polling."""
+    as a JSON API for progress polling. Rate-limited: this is the most
+    expensive unauthenticated route in the app (up to 13 sequential live
+    fetches against e-food.gr), meant for occasional manual use, not
+    repeat automated calls."""
     running = start_refresh()
     status = refresh_status()
     status["running"] = running or status["running"]
@@ -820,6 +848,7 @@ CSV_HEADER = [
 
 
 @app.route("/download/sales.csv")
+@limiter.limit("20 per hour")
 def download_sales_csv():
     shop_id = request.args.get("shop_id", type=int)
     q = (request.args.get("q") or "").strip() or None

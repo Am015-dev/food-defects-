@@ -11,6 +11,12 @@ import tempfile
 _fd, _DB_PATH = tempfile.mkstemp(suffix=".db")
 os.close(_fd)
 os.environ["DATABASE_URL"] = f"sqlite:///{_DB_PATH}"
+# Flask-Limiter's per-IP counters are process-wide (memory:// storage),
+# so without this every test hitting /refresh or /download/sales.csv
+# would share one counter with every other such test in the run and
+# could 429 each other depending on test order/count. webapp.py reads
+# this at Limiter construction time, hence set before it's imported.
+os.environ["DISABLE_RATE_LIMITING"] = "1"
 
 import pytest  # noqa: E402
 
