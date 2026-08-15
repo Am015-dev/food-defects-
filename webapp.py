@@ -45,6 +45,7 @@ from queries import (
     get_bug_streaks,
     get_categories,
     get_category_page,
+    get_category_trend,
     get_deals_page,
     get_flagged_items_filtered,
     get_history,
@@ -852,10 +853,29 @@ def category_browse(name):
             per_page=per_page,
             latest=latest,
         )
+        trend_rows = get_category_trend(session, name)
     finally:
         session.close()
 
     _enrich_with_comparison_info(rows)
+
+    trend_chart = ""
+    if len(trend_rows) >= 2:
+        trend_chart = line_chart(
+            [
+                {
+                    "label": "Μέση τιμή",
+                    "color": "var(--chart-blue)",
+                    "dash": "",
+                    "points": [
+                        (format_gr_date(d), avg_price) for d, avg_price, _, _ in trend_rows
+                    ],
+                }
+            ],
+            height=150,
+            y_zero=False,
+            value_suffix="€",
+        )
 
     pages = max(1, math.ceil(total / per_page))
     return render_template(
@@ -869,6 +889,7 @@ def category_browse(name):
         q=q,
         shop_filter=shop_filter,
         sort=sort,
+        trend_chart=trend_chart,
     )
 
 

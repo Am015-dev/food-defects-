@@ -12,6 +12,7 @@ from queries import (
     deal_tier,
     get_basket_comparison,
     get_category_page,
+    get_category_trend,
     get_new_verified_deals,
     get_price_drops,
     get_price_extremes,
@@ -929,6 +930,53 @@ def test_get_price_extremes_filters_by_shop_and_min_swing():
         )
         assert total == 1
         assert rows[0]["name"] == "In Shop A"
+    finally:
+        session.close()
+
+
+def test_get_category_trend_returns_oldest_to_newest():
+    from db import CategoryDailySummary
+
+    session = SessionLocal()
+    try:
+        session.add_all(
+            [
+                CategoryDailySummary(
+                    category="Τρόφιμα",
+                    snapshot_date="2026-08-12",
+                    avg_price=2.0,
+                    item_count=5,
+                    bug_count=0,
+                ),
+                CategoryDailySummary(
+                    category="Τρόφιμα",
+                    snapshot_date="2026-08-13",
+                    avg_price=3.0,
+                    item_count=6,
+                    bug_count=1,
+                ),
+                CategoryDailySummary(
+                    category="Άλλη Κατηγορία",
+                    snapshot_date="2026-08-13",
+                    avg_price=99.0,
+                    item_count=1,
+                    bug_count=0,
+                ),
+            ]
+        )
+        session.commit()
+
+        rows = get_category_trend(session, "Τρόφιμα")
+        assert [r[0] for r in rows] == ["2026-08-12", "2026-08-13"]  # oldest first
+        assert [r[1] for r in rows] == [2.0, 3.0]
+    finally:
+        session.close()
+
+
+def test_get_category_trend_unknown_category_is_empty():
+    session = SessionLocal()
+    try:
+        assert get_category_trend(session, "Δεν υπάρχει") == []
     finally:
         session.close()
 

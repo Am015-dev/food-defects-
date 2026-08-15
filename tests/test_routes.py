@@ -633,6 +633,35 @@ def test_category_browse_out_of_range_page_shows_real_rows_not_empty(client, see
     assert COMMON_PRODUCT in resp.get_data(as_text=True)
 
 
+def test_category_browse_shows_trend_chart_when_history_exists(client, seeded):
+    from db import CategoryDailySummary
+
+    session = SessionLocal()
+    try:
+        session.add_all(
+            [
+                CategoryDailySummary(
+                    category="Τρόφιμα", snapshot_date="2026-08-12", avg_price=1.5, item_count=4, bug_count=0
+                ),
+                CategoryDailySummary(
+                    category="Τρόφιμα", snapshot_date="2026-08-13", avg_price=2.5, item_count=4, bug_count=1
+                ),
+            ]
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    body = client.get("/category/Τρόφιμα").get_data(as_text=True)
+    assert "Μέση τιμή κατηγορίας" in body
+    assert "chart" in body
+
+
+def test_category_browse_no_trend_chart_when_no_history(client, seeded):
+    body = client.get("/category/Τρόφιμα").get_data(as_text=True)
+    assert "Μέση τιμή κατηγορίας" not in body
+
+
 def test_deals_category_link_points_at_category_browse(client, seeded):
     body = client.get("/deals").get_data(as_text=True)
     assert "/category/" in body

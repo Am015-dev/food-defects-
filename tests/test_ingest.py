@@ -1,9 +1,10 @@
-"""Tests for ingest.update_price_extremes_rollup -- the nightly rollup
-that pre-aggregates each currently-listed item's min/max price so the
-web service never has to scan full item_prices history live."""
+"""Tests for ingest.update_price_extremes_rollup and
+update_category_daily_summary -- the nightly rollups that pre-aggregate
+data the web service would otherwise have to scan full item_prices
+history live to compute."""
 
-from db import PriceExtreme, SessionLocal
-from ingest import store_snapshot, update_price_extremes_rollup
+from db import CategoryDailySummary, PriceExtreme, SessionLocal
+from ingest import store_snapshot, update_category_daily_summary, update_price_extremes_rollup
 from shops import SHOPS
 
 SHOP_A = SHOPS[0]["id"]
@@ -152,3 +153,152 @@ def test_rollup_covers_every_shop_independently():
         assert shops == {SHOP_A, SHOP_B}
     finally:
         session.close()
+
+
+def _catalog_with_category(category, items):
+    return {
+        "information": {"title": "T", "address": {"description": "A"}, "is_open": True},
+        "menu": {"categories": [{"name": category, "items": items}]},
+    }
+
+
+def test_category_summary_folds_subcategories_and_averages_price():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog_with_category(
+                "Τρόφιμα || Ζυμαρικά",
+                [{"id": 1, "code": "c1", "name": "Pasta", "price": 2.0, "tags": []}],
+            ),
+        )
+        store_snapshot(
+            session,
+            SHOP_B,
+            SHOP_B_LABEL,
+            "2026-08-13",
+            _catalog_with_category(
+                "Τρόφιμα || Κρέας",  # different subcategory, same top-level group
+                [{"id": 2, "code": "c2", "name": "Meat", "price": 6.0, "tags": []}],
+            ),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    written = update_category_daily_summary(today="2026-08-13")
+    assert written == 1  # both fold into one "Τρόφιμα" row
+
+    session = SessionLocal()
+    try:
+        row = session.query(CategoryDailySummary).filter_by(category="Τρόφιμα").one()
+        assert row.item_count == 2
+        assert row.avg_price == 4.0  # mean of 2.0 and 6.0
+        assert row.bug_count == 0
+    finally:
+        session.close()
+
+
+def test_category_summary_counts_bugs_and_excludes_zero_price_from_average():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog_with_category(
+                "Καθαριότητα || Test",
+                [
+                    {"id": 1, "code": "c1", "name": "Broken", "price": 0.0, "tags": []},
+                    {"id": 2, "code": "c2", "name": "Fine", "price": 5.0, "tags": []},
+                ],
+            ),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    update_category_daily_summary(today="2026-08-13")
+
+    session = SessionLocal()
+    try:
+        row = session.query(CategoryDailySummary).filter_by(category="Καθαριότητα").one()
+        assert row.item_count == 2
+        assert row.bug_count == 1  # the zero-price bug
+        assert row.avg_price == 5.0  # only the real price counts
+    finally:
+        session.close()
+
+
+def test_category_summary_reruns_for_same_day_replace_not_duplicate():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog_with_category(
+                "Τρόφιμα || Test", [{"id": 1, "code": "c1", "name": "Item", "price": 2.0, "tags": []}]
+            ),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    update_category_daily_summary(today="2026-08-13")
+    update_category_daily_summary(today="2026-08-13")
+
+    session = SessionLocal()
+    try:
+        assert session.query(CategoryDailySummary).filter_by(category="Τρόφιμα").count() == 1
+    finally:
+        session.close()
+
+
+def test_category_summary_keeps_separate_rows_per_day():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-12",
+            _catalog_with_category(
+                "Τρόφιμα || Test", [{"id": 1, "code": "c1", "name": "Item", "price": 2.0, "tags": []}]
+            ),
+        )
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog_with_category(
+                "Τρόφιμα || Test", [{"id": 1, "code": "c1", "name": "Item", "price": 3.0, "tags": []}]
+            ),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    update_category_daily_summary(today="2026-08-12")
+    update_category_daily_summary(today="2026-08-13")
+
+    session = SessionLocal()
+    try:
+        rows = session.query(CategoryDailySummary).filter_by(category="Τρόφιμα").order_by(
+            CategoryDailySummary.snapshot_date
+        )
+        prices = [r.avg_price for r in rows]
+        assert prices == [2.0, 3.0]
+    finally:
+        session.close()
+
+
+def test_category_summary_no_snapshot_for_day_returns_zero():
+    written = update_category_daily_summary(today="2099-01-01")
+    assert written == 0

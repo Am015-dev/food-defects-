@@ -128,8 +128,8 @@ class PriceExtreme(Base):
     runner, which has the RAM to aggregate the full history; the web
     service only ever reads this small precomputed table, never
     recomputes it live. Delisted items' rows are deleted at rollup
-    time (see update_price_extremes in queries.py), not merely left
-    stale."""
+    time (see update_price_extremes_rollup in ingest.py), not merely
+    left stale."""
 
     __tablename__ = "price_extremes"
 
@@ -145,6 +145,28 @@ class PriceExtreme(Base):
     updated_at = Column(DateTime, nullable=False)
 
     __table_args__ = (UniqueConstraint("shop_id", "code", name="uq_price_extreme_shop_code"),)
+
+
+class CategoryDailySummary(Base):
+    """One row per (top-level category group, calendar day), across
+    every tracked shop combined -- average price, item count, and bug
+    count for that category on that day. Written once per ingest run
+    (see ingest.update_category_daily_summary), kept forever like
+    Snapshot rows rather than pruned with item_prices (see
+    retention.py): a few dozen categories x one row/day is negligible
+    growth, and it's what lets a category's trend chart cover more
+    than the ~90-day item_prices retention window."""
+
+    __tablename__ = "category_daily_summaries"
+
+    id = Column(Integer, primary_key=True)
+    category = Column(String, nullable=False)
+    snapshot_date = Column(String, nullable=False)  # "YYYY-MM-DD"
+    avg_price = Column(Float)
+    item_count = Column(Integer, nullable=False)
+    bug_count = Column(Integer, nullable=False)
+
+    __table_args__ = (UniqueConstraint("category", "snapshot_date", name="uq_category_summary_day"),)
 
 
 def _add_missing_columns():
@@ -238,6 +260,9 @@ def _ensure_indexes():
         "CREATE INDEX IF NOT EXISTS ix_item_prices_snapshot_product ON item_prices (snapshot_id, product_id)",
         # The /extremes leaderboard reads this table sorted by swing size.
         "CREATE INDEX IF NOT EXISTS ix_price_extremes_swing ON price_extremes (swing_pct)",
+        # get_category_trend filters by category and orders by date.
+        "CREATE INDEX IF NOT EXISTS ix_category_summary_category_date "
+        "ON category_daily_summaries (category, snapshot_date)",
     ]
     with engine.begin() as conn:
         for statement in statements:

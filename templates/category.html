@@ -7,6 +7,13 @@
   <h1>{{ category }}</h1>
 </div>
 
+{% if trend_chart %}
+<section class="panel" data-aos="fade-up">
+  <h3>Μέση τιμή κατηγορίας</h3>
+  <div class="chart-block">{{ trend_chart|safe }}</div>
+</section>
+{% endif %}
+
 <form class="filters" method="get" action="{{ url_for('category_browse', name=category) }}">
   <label class="grow wide">Προϊόν
     <input type="search" name="q" value="{{ q or '' }}" placeholder="π.χ. γάλα, χαρτί υγείας…">

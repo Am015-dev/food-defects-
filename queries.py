@@ -9,7 +9,7 @@ from collections import defaultdict
 from sqlalchemy import and_, func, literal, literal_column, or_
 from sqlalchemy.orm import aliased
 
-from db import ItemPrice, PriceExtreme, Product, ProductListing, Snapshot
+from db import CategoryDailySummary, ItemPrice, PriceExtreme, Product, ProductListing, Snapshot
 from price_utils import fold_name
 
 
@@ -1153,3 +1153,24 @@ def get_price_extremes(
         for r in rows
     ]
     return results, total
+
+
+def get_category_trend(session, category, days=90):
+    """Oldest-to-newest (date, avg_price, item_count, bug_count) history
+    for one top-level category group, from the category_daily_summaries
+    rollup (see ingest.update_category_daily_summary) -- kept forever,
+    unlike item_prices, so this can look back further than retention.py's
+    ~90-day window. One aggregate query over a small table."""
+    rows = (
+        session.query(
+            CategoryDailySummary.snapshot_date,
+            CategoryDailySummary.avg_price,
+            CategoryDailySummary.item_count,
+            CategoryDailySummary.bug_count,
+        )
+        .filter(CategoryDailySummary.category == category)
+        .order_by(CategoryDailySummary.snapshot_date.desc())
+        .limit(days)
+        .all()
+    )
+    return list(reversed(rows))

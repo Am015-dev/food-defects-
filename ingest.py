@@ -10,12 +10,22 @@ service type, so scheduling lives in GitHub Actions instead, on a
 runner with its own RAM rather than the memory-constrained web service.
 """
 
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from sqlalchemy import func
 
-from db import ItemPrice, PriceExtreme, ProductListing, SessionLocal, Shop, Snapshot, init_db
+from db import (
+    CategoryDailySummary,
+    ItemPrice,
+    PriceExtreme,
+    ProductListing,
+    SessionLocal,
+    Shop,
+    Snapshot,
+    init_db,
+)
 from efood_client import fetch_restaurant
 from price_analysis import (
     find_placeholder_reference_price_bugs,
@@ -250,6 +260,65 @@ def update_price_extremes_rollup(session=None):
             session.close()
 
 
+def update_category_daily_summary(session=None, today=None):
+    """Roll up today's ItemPrice rows (across every shop combined) into
+    one row per top-level category group: average price, item count,
+    bug count. Unlike price_extremes, these rows are never pruned --
+    same append-forever treatment as Snapshot -- so a category's price
+    trend can span longer than item_prices' ~90-day retention window.
+    Idempotent: reruns for the same day replace that day's rows rather
+    than duplicating them, the same delete-then-insert pattern
+    store_snapshot uses for a shop's day.
+    """
+    owns_session = session is None
+    session = session or SessionLocal()
+    try:
+        if today is None:
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        snapshot_ids = [
+            sid for (sid,) in session.query(Snapshot.id).filter(Snapshot.snapshot_date == today)
+        ]
+        if not snapshot_ids:
+            return 0
+
+        buckets = defaultdict(lambda: {"price_sum": 0.0, "price_count": 0, "items": 0, "bugs": 0})
+        query = session.query(
+            ItemPrice.category,
+            ItemPrice.price,
+            ItemPrice.is_zero_price_bug,
+            ItemPrice.is_placeholder_bug,
+        ).filter(ItemPrice.snapshot_id.in_(snapshot_ids), ItemPrice.category.isnot(None))
+        for category, price, is_zero, is_placeholder in query:
+            top = category.split(" || ")[0].strip()
+            if not top:
+                continue
+            bucket = buckets[top]
+            bucket["items"] += 1
+            if price and price > 0:
+                bucket["price_sum"] += price
+                bucket["price_count"] += 1
+            if is_zero or is_placeholder:
+                bucket["bugs"] += 1
+
+        session.query(CategoryDailySummary).filter_by(snapshot_date=today).delete(synchronize_session=False)
+        new_rows = [
+            CategoryDailySummary(
+                category=top,
+                snapshot_date=today,
+                avg_price=(b["price_sum"] / b["price_count"]) if b["price_count"] else None,
+                item_count=b["items"],
+                bug_count=b["bugs"],
+            )
+            for top, b in buckets.items()
+        ]
+        session.bulk_save_objects(new_rows)
+        session.commit()
+        return len(new_rows)
+    finally:
+        if owns_session:
+            session.close()
+
+
 def run_ingestion():
     """Fetch and store every tracked shop, with bounded concurrency so
     only a handful of shops' raw catalogs are ever in memory at once.
@@ -281,6 +350,12 @@ def run_ingestion():
         print(f"price extremes: refreshed {written} row(s)")
     except Exception as exc:  # noqa: BLE001 - a rollup failure shouldn't fail ingestion
         print(f"price extremes: rollup failed, will retry next run: {exc}")
+
+    try:
+        cat_written = update_category_daily_summary(today=today)
+        print(f"category summary: wrote {cat_written} row(s) for {today}")
+    except Exception as exc:  # noqa: BLE001 - a summary failure shouldn't fail ingestion
+        print(f"category summary: failed, will retry next run: {exc}")
 
     return {"date": today, "results": results}
 
