@@ -46,10 +46,12 @@
   <button type="submit" class="js-hide">Εφαρμογή</button>
 </form>
 
-<section class="panel" data-aos="fade-up">
-  <p class="meta">{{ total }} προσφορές{% if total %} · σελίδα {{ page }} από {{ pages }}{% endif %}
-    · <a href="{{ url_for('download_sales_csv', shop_id=shop_filter, q=q, category=category) }}">Λήψη CSV →</a>
-    · <a href="{{ url_for('deals_feed') }}">RSS →</a></p>
+<section class="panel panel-good" data-aos="fade-up">
+  <p class="meta">{{ total }} προσφορές{% if total %} · σελίδα {{ page }} από {{ pages }}{% endif %}</p>
+  <p class="meta">
+    <a class="chip" href="{{ url_for('download_sales_csv', shop_id=shop_filter, q=q, category=category) }}">⬇ CSV</a>
+    <a class="chip ml-8" href="{{ url_for('deals_feed') }}">📡 RSS</a>
+  </p>
   {% if rows %}
   <div class="table-scroll">
     <table class="cards-mobile">

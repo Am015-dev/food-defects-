@@ -81,8 +81,21 @@ document.addEventListener("DOMContentLoaded", function () {
 
   // 6. Scroll reveals. disable under reduced motion; the CSS overrides in
   //    style.css also force [data-aos] visible for no-JS/reduced-motion.
+  //    The html.js class (set above, unconditionally, the moment ANY JS
+  //    runs) only covers the no-JS case -- it says nothing about whether
+  //    this specific vendor script actually loaded. If aos.js itself
+  //    fails (a flaky network, an ad-blocker matching "vendor" scripts,
+  //    a CDN hiccup -- anything short of JS being fully disabled), every
+  //    [data-aos] panel would otherwise sit at opacity:0 forever, since
+  //    aos.css's hidden state has no other trigger to clear it. Fail
+  //    open: reveal everything immediately whenever AOS didn't load.
   if (window.AOS) {
     AOS.init({ once: true, duration: 400, offset: 40, easing: "ease-out-cubic", disable: reduceMotion });
+  } else {
+    document.querySelectorAll("[data-aos]").forEach(function (el) {
+      el.style.opacity = "1";
+      el.style.transform = "none";
+    });
   }
 
   // 7. Fade thumbnails in as they finish loading. Cached images

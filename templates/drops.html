@@ -38,9 +38,11 @@
   <button type="submit" class="js-hide">Εφαρμογή</button>
 </form>
 
-<section class="panel" data-aos="fade-up">
-  <p class="meta">{{ total }} πτώσεις τιμής{% if total %} · σελίδα {{ page }} από {{ pages }}{% endif %}
-    · <a href="{{ url_for('download_drops_csv', shop_id=shop_filter, q=q, category=category, min_drop_pct=min_drop_pct) }}">Λήψη CSV →</a></p>
+<section class="panel panel-info" data-aos="fade-up">
+  <p class="meta">{{ total }} πτώσεις τιμής{% if total %} · σελίδα {{ page }} από {{ pages }}{% endif %}</p>
+  <p class="meta">
+    <a class="chip" href="{{ url_for('download_drops_csv', shop_id=shop_filter, q=q, category=category, min_drop_pct=min_drop_pct) }}">⬇ CSV</a>
+  </p>
   {% if rows %}
   <div class="table-scroll">
     <table class="cards-mobile">

@@ -18,10 +18,10 @@
 {% else %}
 
 <div class="stat-strip">
-  <div class="stat"><b>{{ r.total_items }}</b><span>προϊόντα</span></div>
-  <div class="stat"><b>{{ r.zero_price_bugs|length }}</b><span>μηδενικές τιμές</span></div>
-  <div class="stat"><b>{{ r.placeholder_bugs|length }}</b><span>πλασματικές κατώτατες</span></div>
-  <div class="stat"><b>{{ r.verified_deals|length }}</b><span>προσφορές</span></div>
+  <div class="stat stat-neutral"><b>{{ r.total_items }}</b><span>προϊόντα</span></div>
+  <div class="stat stat-bad"><b>{{ r.zero_price_bugs|length }}</b><span>μηδενικές τιμές</span></div>
+  <div class="stat stat-warn"><b>{{ r.placeholder_bugs|length }}</b><span>πλασματικές κατώτατες</span></div>
+  <div class="stat stat-good"><b>{{ r.verified_deals|length }}</b><span>προσφορές</span></div>
 </div>
 
 <section class="panel" data-aos="fade-up">

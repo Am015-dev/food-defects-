@@ -11,7 +11,7 @@
     <label>Λίστα αγορών (ένα προϊόν ανά γραμμή, έως {{ max_items }})
       <textarea name="items" rows="6" placeholder="π.χ.&#10;γάλα&#10;ψωμί&#10;ελαιόλαδο">{{ raw_items }}</textarea>
     </label>
-    <button type="submit">Σύγκριση</button>
+    <button type="submit" class="btn">Σύγκριση →</button>
   </form>
   {% if truncated %}
   <p class="meta">Χρησιμοποιήθηκαν μόνο οι πρώτες {{ max_items }} γραμμές.</p>
@@ -21,7 +21,7 @@
 {% if terms %}
 
 {% if split %}
-<section class="panel" data-aos="fade-up">
+<section class="panel panel-good" data-aos="fade-up">
   <h2>Καλύτερος συνδυασμός</h2>
   <p class="meta">Αγοράζοντας κάθε προϊόν από το φθηνότερο κατάστημα: <span class="price-now">{{ split.total|eur }}</span>
     · {{ split.shops_needed }} κατάστημα{{ "τα" if split.shops_needed != 1 else "" }}
@@ -47,7 +47,7 @@
 {% endif %}
 
 {% if shop_totals %}
-<section class="panel" data-aos="fade-up">
+<section class="panel panel-info" data-aos="fade-up">
   <h2>Σύνολο ανά κατάστημα</h2>
   <div class="table-scroll">
     <table>

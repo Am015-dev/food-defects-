@@ -8,28 +8,28 @@
 </div>
 
 {% if refresh.running %}
-<section class="panel banner">
+<section class="panel panel-info banner">
   <h2>Λήψη δεδομένων: {{ refresh.done }}/{{ refresh.total }} καταστήματα</h2>
 </section>
 {% elif is_stale %}
-<section class="panel banner">
+<section class="panel panel-warn banner">
   <h2>Τα δεδομένα μπορεί να είναι παλιά</h2>
   <p class="meta">{{ last_updated|grdate if last_updated else "ποτέ" }}
   <form method="post" action="/refresh" class="inline-form ml-8">
-    <button type="submit" class="btn secondary">Ανανέωση τώρα →</button>
+    <button type="submit" class="btn warn">Ανανέωση τώρα →</button>
   </form></p>
 </section>
 {% endif %}
 
 <div class="stat-strip">
-  <div class="stat"><b>{{ shop_rows|length }}</b><span>καταστήματα</span></div>
-  <div class="stat"><b>{{ total_items }}</b><span>προϊόντα</span></div>
-  <div class="stat"><b>{{ total_bugs }}</b><span>σφάλματα</span></div>
-  <div class="stat"><b>{{ total_deals }}</b><span>προσφορές</span></div>
+  <div class="stat stat-neutral"><b>{{ shop_rows|length }}</b><span>καταστήματα</span></div>
+  <div class="stat stat-neutral"><b>{{ total_items }}</b><span>προϊόντα</span></div>
+  <div class="stat stat-bad"><b>{{ total_bugs }}</b><span>σφάλματα</span></div>
+  <div class="stat stat-good"><b>{{ total_deals }}</b><span>προσφορές</span></div>
 </div>
 
 {% if trend_charts %}
-<section class="panel" data-aos="fade-up">
+<section class="panel panel-info" data-aos="fade-up">
   <h2>Τάση {{ trend_days }} ημερών</h2>
   <div class="chart-grid">
     <div>
@@ -68,9 +68,9 @@
 </form>
 
 {% if bug_type != 'deal' %}
-<section class="panel" id="bugs-summary" data-aos="fade-up">
+<section class="panel panel-bad" id="bugs-summary" data-aos="fade-up">
   <h2>Σφάλματα τιμών
-    <a class="ml-8" href="{{ url_for('download_bugs_csv', shop_id=shop_filter, q=q) }}">Λήψη CSV →</a></h2>
+    <a class="chip ml-8" href="{{ url_for('download_bugs_csv', shop_id=shop_filter, q=q) }}">⬇ CSV</a></h2>
 
   {% if bug_type in (None, 'zero') %}
   <div class="section">
@@ -116,7 +116,7 @@
 {% endif %}
 
 {% if bug_type in (None, 'deal') %}
-<section class="panel" id="bargains" data-aos="fade-up">
+<section class="panel panel-good" id="bargains" data-aos="fade-up">
   <h2>Καλύτερες προσφορές <span class="item-cat">20%+ κάτω από την πραγματική κατώτατη 30ημ.</span></h2>
   {% if bargains %}
   <div class="table-scroll">
@@ -137,14 +137,14 @@
       </tbody>
     </table>
   </div>
-  <div class="section"><a class="btn secondary" href="/deals">Όλες οι προσφορές ({{ total_deals }}) →</a></div>
+  <div class="section"><a class="btn good" href="/deals">Όλες οι προσφορές ({{ total_deals }}) →</a></div>
   {% else %}
   <div class="empty">Καμία ακόμη.</div>
   {% endif %}
 </section>
 {% endif %}
 
-<section class="panel" id="drops" data-aos="fade-up">
+<section class="panel panel-info" id="drops" data-aos="fade-up">
   <h2>Πρόσφατες πτώσεις τιμών</h2>
   {% if price_drops %}
   <div class="table-scroll">
@@ -165,14 +165,14 @@
       </tbody>
     </table>
   </div>
-  <div class="section"><a class="btn secondary" href="/drops">Όλες οι πτώσεις τιμών →</a></div>
+  <div class="section"><a class="btn" href="/drops">Όλες οι πτώσεις τιμών →</a></div>
   {% else %}
   <div class="empty">Καμία πτώση ακόμη.</div>
   {% endif %}
 </section>
 
 {% if bug_leaderboard %}
-<section class="panel" data-aos="fade-up">
+<section class="panel panel-bad" data-aos="fade-up">
   <h2>Καταστήματα με τα περισσότερα σφάλματα <span class="item-cat">ποσοστό επί του καταλόγου</span></h2>
   <div class="table-scroll">
     <table>
