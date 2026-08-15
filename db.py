@@ -192,6 +192,23 @@ def _ensure_indexes():
         "CREATE INDEX IF NOT EXISTS ix_item_prices_code ON item_prices (code)",
         # compare_across_shops groups by product_id -- see product_matching.py.
         "CREATE INDEX IF NOT EXISTS ix_item_prices_product ON item_prices (product_id)",
+        # get_flagged_items_filtered (dashboard bug lists, shop.html) runs
+        # once per shop filtering snapshot_id plus exactly one of these
+        # three flags -- a plain snapshot index alone still leaves that
+        # second predicate to filter row-by-row after the scan.
+        "CREATE INDEX IF NOT EXISTS ix_item_prices_snapshot_zero_bug "
+        "ON item_prices (snapshot_id, is_zero_price_bug)",
+        "CREATE INDEX IF NOT EXISTS ix_item_prices_snapshot_placeholder_bug "
+        "ON item_prices (snapshot_id, is_placeholder_bug)",
+        "CREATE INDEX IF NOT EXISTS ix_item_prices_snapshot_deal "
+        "ON item_prices (snapshot_id, is_verified_deal)",
+        # _shop_price_drops_query self-joins on (snapshot_id, code) from
+        # both sides -- a composite serves that directly instead of
+        # merging two single-column index scans.
+        "CREATE INDEX IF NOT EXISTS ix_item_prices_snapshot_code ON item_prices (snapshot_id, code)",
+        # get_product_across_shops and compare_across_shops both filter
+        # snapshot_id together with product_id.
+        "CREATE INDEX IF NOT EXISTS ix_item_prices_snapshot_product ON item_prices (snapshot_id, product_id)",
     ]
     with engine.begin() as conn:
         for statement in statements:

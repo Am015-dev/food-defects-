@@ -437,3 +437,22 @@ def test_get_shop_bug_rates_excludes_shops_below_min_items():
         assert get_shop_bug_rates(latest, shop_labels, min_items=20) == []
     finally:
         session.close()
+
+
+# ---------- indexes ----------
+
+
+def test_composite_indexes_exist_on_item_prices():
+    from sqlalchemy import inspect
+
+    from db import engine
+
+    index_names = {ix["name"] for ix in inspect(engine).get_indexes("item_prices")}
+    for name in (
+        "ix_item_prices_snapshot_zero_bug",
+        "ix_item_prices_snapshot_placeholder_bug",
+        "ix_item_prices_snapshot_deal",
+        "ix_item_prices_snapshot_code",
+        "ix_item_prices_snapshot_product",
+    ):
+        assert name in index_names
