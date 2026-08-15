@@ -43,6 +43,7 @@ from queries import (
     compare_across_shops,
     deal_tier,
     get_basket_comparison,
+    get_best_value_picks,
     get_bug_streaks,
     get_categories,
     get_category_page,
@@ -338,6 +339,7 @@ def view_from_snapshot(session, shop_id, label, snapshot, q=None, bug_type=None)
                 "category": it.category,
                 "code": it.code,
                 "shop_id": shop_id,
+                "price": it.price,
                 "streak": zero_streaks.get(it.code, 1),
             }
             for it in zero_price_bugs
@@ -347,6 +349,7 @@ def view_from_snapshot(session, shop_id, label, snapshot, q=None, bug_type=None)
                 "name": it.name,
                 "category": it.category,
                 "price": it.price,
+                "l30d_price": it.l30d_price,
                 "code": it.code,
                 "shop_id": shop_id,
                 "streak": placeholder_streaks.get(it.code, 1),
@@ -655,6 +658,7 @@ def dashboard():
         shop_filter=shop_filter,
         q=q,
         bug_type=bug_type,
+        placeholder_threshold=PLACEHOLDER_THRESHOLD_EUR,
     )
 
 
@@ -669,7 +673,13 @@ def shop_page(shop_id):
     prev_id = ids[idx - 1] if idx > 0 else None
     next_id = ids[idx + 1] if idx < len(ids) - 1 else None
 
-    return render_template("shop.html", r=view, prev_id=prev_id, next_id=next_id)
+    return render_template(
+        "shop.html",
+        r=view,
+        prev_id=prev_id,
+        next_id=next_id,
+        placeholder_threshold=PLACEHOLDER_THRESHOLD_EUR,
+    )
 
 
 @app.route("/deals")
@@ -794,6 +804,73 @@ def compare():
         q=q,
         category=category,
         min_spread=min_spread,
+        scan_too_large=scan_too_large,
+    )
+
+
+# Same guard as /compare's COMPARE_SCAN_GUARD_ROWS -- get_best_value_picks
+# scans every priced item matching shop/category/q, not just a small
+# flagged subset the way /deals does, so an unfiltered request across the
+# whole catalog needs the same refuse-and-ask-to-narrow treatment.
+CHEAP_SCAN_GUARD_ROWS = 20000
+
+
+@app.route("/cheap")
+def cheap():
+    """The genuinely cheapest products right now, ranked against their
+    own category -- not just whatever the retailer happens to have
+    marked down (see /deals). Direct answer to "what should I actually
+    buy," independent of any sale badge."""
+    shop_filter = _valid_shop_id()
+    category = _parse_category()
+    q = _parse_q()
+    page = max(1, request.args.get("page", default=1, type=int))
+    per_page = 50
+
+    session = SessionLocal()
+    try:
+        latest = get_latest_snapshots_for_all_shops(session, list(SHOP_LABELS))
+        categories = get_categories(session, [s.id for s in latest.values()])
+
+        scan_too_large = False
+        if not q and not category and not shop_filter and latest:
+            catalog_size = (
+                session.query(ItemPrice.id)
+                .filter(
+                    ItemPrice.snapshot_id.in_([s.id for s in latest.values()]),
+                    ItemPrice.price > 0,
+                )
+                .count()
+            )
+            scan_too_large = catalog_size > CHEAP_SCAN_GUARD_ROWS
+
+        if scan_too_large:
+            rows, total = [], 0
+        else:
+            rows, total = get_best_value_picks(
+                session,
+                SHOP_LABELS,
+                shop_id=shop_filter,
+                category=category,
+                q=q,
+                page=page,
+                per_page=per_page,
+                latest=latest,
+            )
+    finally:
+        session.close()
+
+    pages = max(1, math.ceil(total / per_page))
+    return render_template(
+        "cheap.html",
+        rows=rows,
+        total=total,
+        page=min(page, pages),
+        pages=pages,
+        categories=categories,
+        shop_filter=shop_filter,
+        category=category,
+        q=q,
         scan_too_large=scan_too_large,
     )
 
@@ -982,6 +1059,7 @@ def category_browse(name):
         shop_filter=shop_filter,
         sort=sort,
         trend_chart=trend_chart,
+        trend_days=len(trend_rows),
     )
 
 

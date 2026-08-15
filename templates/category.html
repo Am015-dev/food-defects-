@@ -11,6 +11,9 @@
 <section class="panel panel-info" data-aos="fade-up">
   <h3>Μέση τιμή κατηγορίας</h3>
   <div class="chart-block">{{ trend_chart|safe }}</div>
+  {% if trend_days < 7 %}
+  <p class="chart-note">Μόνο {{ trend_days }} ημέρες ιστορικού μέχρι στιγμής -- η βάση δεδομένων μεγαλώνει καθημερινά.</p>
+  {% endif %}
 </section>
 {% endif %}
 

@@ -11,6 +11,7 @@ from queries import (
     compare_across_shops,
     deal_tier,
     get_basket_comparison,
+    get_best_value_picks,
     get_category_page,
     get_category_trend,
     get_category_unit_price_medians,
@@ -37,6 +38,15 @@ def _catalog(items):
     return {
         "information": {"title": "T", "address": {"description": "A"}, "is_open": True},
         "menu": {"categories": [{"name": "Cat", "items": items}]},
+    }
+
+
+def _multi_catalog(categories):
+    """categories: {category_name: [items]} -- for tests that need more
+    than one distinct category in a single snapshot."""
+    return {
+        "information": {"title": "T", "address": {"description": "A"}, "is_open": True},
+        "menu": {"categories": [{"name": name, "items": items} for name, items in categories.items()]},
     }
 
 
@@ -1464,5 +1474,92 @@ def test_get_deals_page_includes_deal_that_is_cheap_for_its_category():
         rows, total = get_deals_page(session, {SHOP_A: SHOP_A_LABEL})
         assert total == 1
         assert rows[0]["name"] == "Ice Cream Deal"
+    finally:
+        session.close()
+
+
+def test_get_best_value_picks_ranks_cheapest_relative_to_category_first():
+    # No discount/sale flag on any of these -- get_best_value_picks
+    # answers "what's actually cheap" independent of /deals entirely.
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    _item(1, "Mid Price", 2.0, size_info="1kg"),  # 0.20 €/100g
+                    _item(2, "Best Value", 1.0, size_info="1kg"),  # 0.10 €/100g
+                    _item(3, "Priciest", 3.0, size_info="1kg"),  # 0.30 €/100g
+                ]
+            ),
+        )
+        session.commit()
+
+        rows, total = get_best_value_picks(session, {SHOP_A: SHOP_A_LABEL})
+        assert total == 3
+        assert [r["name"] for r in rows] == ["Best Value", "Mid Price", "Priciest"]
+        assert rows[0]["unit_price"] == pytest.approx(0.10)
+        assert rows[0]["savings_pct"] == pytest.approx(50.0)  # (0.20 - 0.10) / 0.20 * 100
+    finally:
+        session.close()
+
+
+def test_get_best_value_picks_excludes_items_without_a_benchmark():
+    # Only two comparable items -- below MIN_CATEGORY_SAMPLE, so neither
+    # has a trustworthy median to rank against.
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    _item(1, "Item A", 1.0, size_info="1kg"),
+                    _item(2, "Item B", 2.0, size_info="1kg"),
+                ]
+            ),
+        )
+        session.commit()
+
+        rows, total = get_best_value_picks(session, {SHOP_A: SHOP_A_LABEL})
+        assert total == 0
+        assert rows == []
+    finally:
+        session.close()
+
+
+def test_get_best_value_picks_category_filter_narrows_results():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _multi_catalog(
+                {
+                    "Cat A": [
+                        _item(1, "A1", 1.0, size_info="1kg"),
+                        _item(2, "A2", 2.0, size_info="1kg"),
+                        _item(3, "A3", 3.0, size_info="1kg"),
+                    ],
+                    "Cat B": [
+                        _item(4, "B1", 1.0, size_info="1kg"),
+                        _item(5, "B2", 2.0, size_info="1kg"),
+                        _item(6, "B3", 3.0, size_info="1kg"),
+                    ],
+                }
+            ),
+        )
+        session.commit()
+
+        rows, total = get_best_value_picks(session, {SHOP_A: SHOP_A_LABEL}, category="Cat A")
+        assert total == 3
+        assert {r["name"] for r in rows} == {"A1", "A2", "A3"}
     finally:
         session.close()

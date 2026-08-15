@@ -92,6 +92,9 @@
     </p>
     {% endif %}
     <div class="chart-block">{{ price_chart|safe }}</div>
+    {% if history_points < 7 %}
+    <p class="chart-note">Μόνο {{ history_points }} {{ "ημέρα" if history_points == 1 else "ημέρες" }} ιστορικού μέχρι στιγμής -- η βάση δεδομένων μεγαλώνει καθημερινά, το γράφημα θα γίνεται πιο αντιπροσωπευτικό.</p>
+    {% endif %}
   </div>
   {% elif history_points == 1 %}
   <p class="chart-note">Χρειάζονται 2+ ημέρες για γράφημα.</p>

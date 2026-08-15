@@ -36,7 +36,7 @@
       <li>{{ thumb(r.id, it.code, 32, 64) }}<div class="li-body">
         {% if it.code %}<a href="/item/{{ r.id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
         {% if it.streak >= 2 %}<span class="badge bad" title="Ίδιο σφάλμα {{ it.streak }} ημέρες στη σειρά">🔁 {{ it.streak }}ημ.</span>{% endif %}
-        <span class="item-cat">· {{ it.category }}</span></div></li>
+        <span class="item-cat">· {{ it.category }} · τιμή {{ it.price|eur }}</span></div></li>
       {% endfor %}
     </ul>
   </div>
@@ -44,13 +44,13 @@
 
   {% if r.placeholder_bugs %}
   <div class="section">
-    <h3><span class="badge warn">Κατώτατη 30ημ. 0,01 €</span> ({{ r.placeholder_bugs|length }})</h3>
+    <h3><span class="badge warn">Κατώτατη 30ημ. ≤ {{ placeholder_threshold|eur }}</span> ({{ r.placeholder_bugs|length }})</h3>
     <ul class="items">
       {% for it in r.placeholder_bugs %}
       <li>{{ thumb(r.id, it.code, 32, 64) }}<div class="li-body">
         {% if it.code %}<a href="/item/{{ r.id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
         {% if it.streak >= 2 %}<span class="badge warn" title="Ίδιο σφάλμα {{ it.streak }} ημέρες στη σειρά">🔁 {{ it.streak }}ημ.</span>{% endif %}
-        <span class="item-cat">· {{ it.category }} · τώρα {{ it.price|eur }}</span></div></li>
+        <span class="item-cat">· {{ it.category }} · κατώτατη 30ημ. {{ it.l30d_price|eur }} · τώρα {{ it.price|eur }}</span></div></li>
       {% endfor %}
     </ul>
   </div>

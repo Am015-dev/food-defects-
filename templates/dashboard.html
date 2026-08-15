@@ -102,7 +102,7 @@
       <li>{{ thumb(it.shop_id, it.code, 32, 64) }}<div class="li-body">
         {% if it.code %}<a href="/item/{{ it.shop_id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
         {% if it.streak >= 2 %}<span class="badge bad" title="Ίδιο σφάλμα {{ it.streak }} ημέρες στη σειρά">🔁 {{ it.streak }}ημ.</span>{% endif %}
-        <span class="item-cat">· {{ it.shop_label }} · {{ it.category }}</span>
+        <span class="item-cat">· {{ it.shop_label }} · {{ it.category }} · τιμή {{ it.price|eur }}</span>
       </div></li>
       {% endfor %}
     </ul>
@@ -114,14 +114,14 @@
 
   {% if bug_type in (None, 'placeholder') %}
   <div class="section">
-    <h3><span class="badge warn">Κατώτατη 30ημ. 0,01 €</span> ({{ bugs.placeholder|length }})</h3>
+    <h3><span class="badge warn">Κατώτατη 30ημ. ≤ {{ placeholder_threshold|eur }}</span> ({{ bugs.placeholder|length }})</h3>
     {% if bugs.placeholder %}
     <ul class="items">
       {% for it in bugs.placeholder[:20] %}
       <li>{{ thumb(it.shop_id, it.code, 32, 64) }}<div class="li-body">
         {% if it.code %}<a href="/item/{{ it.shop_id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
         {% if it.streak >= 2 %}<span class="badge warn" title="Ίδιο σφάλμα {{ it.streak }} ημέρες στη σειρά">🔁 {{ it.streak }}ημ.</span>{% endif %}
-        <span class="item-cat">· {{ it.shop_label }} · {{ it.category }} · τώρα {{ it.price|eur }}</span>
+        <span class="item-cat">· {{ it.shop_label }} · {{ it.category }} · κατώτατη 30ημ. {{ it.l30d_price|eur }} · τώρα {{ it.price|eur }}</span>
       </div></li>
       {% endfor %}
     </ul>

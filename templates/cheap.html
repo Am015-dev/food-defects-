@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% from "_macros.html" import thumb %}
+{% block title %}Φθηνότερα — Παρατηρητήριο Τιμών{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Φθηνότερα</h1>
+  <p class="sub">Ό,τι είναι πραγματικά φθηνό για τον τύπο του αυτή τη στιγμή -- ανεξάρτητα από το αν έχει ετικέτα προσφοράς ή όχι. Ταξινομημένα από το πιο συμφέρον προς τα κάτω.</p>
+</div>
+
+<form class="filters" method="get" action="/cheap">
+  <label class="grow wide">Αναζήτηση προϊόντος
+    <input type="search" name="q" value="{{ q or '' }}" placeholder="π.χ. γάλα, ελαιόλαδο…">
+  </label>
+  <label>Κατάστημα
+    <select name="shop">
+      <option value="">Όλα</option>
+      {% for s in shop_nav %}
+      <option value="{{ s.id }}" {% if shop_filter == s.id %}selected{% endif %}>{{ s.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Κατηγορία
+    <select name="category">
+      <option value="">Όλες</option>
+      {% for c in categories %}
+      <option value="{{ c }}" {% if category == c %}selected{% endif %}>{{ c }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit" class="js-hide">Εφαρμογή</button>
+</form>
+
+<section class="panel panel-good" data-aos="fade-up">
+  {% if scan_too_large %}
+  <div class="empty">Ο πλήρης κατάλογος είναι πλέον πολύ μεγάλος για κατάταξη χωρίς φίλτρο —
+  πληκτρολογήστε ένα προϊόν, επιλέξτε κατάστημα, ή επιλέξτε κατηγορία παραπάνω.</div>
+  {% else %}
+  <p class="meta"><span class="stat-inline"><b>{{ total }}</b></span> προϊόντα{% if total %} · σελίδα {{ page }} από {{ pages }}{% endif %}</p>
+  {% if rows %}
+  <div class="card-grid">
+    {% for d in rows %}
+    <div class="product-card">
+      {{ thumb(d.shop_id, d.code, 160, 320) }}
+      {% if d.code %}<a class="product-card-name" href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}<span class="product-card-name">{{ d.name }}</span>{% endif %}
+      <div class="product-card-meta">{{ d.shop_label }} · <a href="{{ url_for('category_browse', name=d.category.split(' || ')[0]) }}">{{ d.category }}</a></div>
+      <div class="product-card-unit">{{ "%.2f"|format(d.unit_price)|replace('.', ',') }}€ ανά μονάδα</div>
+      <div class="product-card-price">
+        <span class="price-now">{{ d.price|eur }}</span>
+        {% if d.savings_pct >= 1 %}<span class="badge good" title="Τόσο χαμηλότερη τιμή ανά μονάδα σε σχέση με τη μεσαία τιμή παρόμοιων προϊόντων, σε όλα τα καταστήματα">-{{ "%.0f"|format(d.savings_pct) }}% από τον μέσο όρο</span>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <nav class="pagination" aria-label="Σελιδοποίηση">
+    {% if page > 1 %}<a href="{{ page_url(page - 1) }}">← Προηγούμενη</a>{% else %}<span class="disabled">← Προηγούμενη</span>{% endif %}
+    <span class="page-info">Σελίδα {{ page }} από {{ pages }}</span>
+    {% if page < pages %}<a href="{{ page_url(page + 1) }}">Επόμενη →</a>{% else %}<span class="disabled">Επόμενη →</span>{% endif %}
+  </nav>
+  {% else %}
+  <div class="empty">Κανένα αποτέλεσμα.</div>
+  {% endif %}
+  {% endif %}
+</section>
+
+{% endblock %}

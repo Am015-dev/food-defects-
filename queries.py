@@ -1394,3 +1394,91 @@ def is_category_competitive(price, category, size_info, metric_unit_description,
     if median is None:
         return False
     return unit_price <= median
+
+
+def get_best_value_picks(
+    session, shop_labels_by_id, shop_id=None, category=None, q=None, page=1, per_page=50, latest=None
+):
+    """The genuinely cheapest products right now, ranked by how far
+    below their own (category, unit-kind) median they sit -- see
+    get_category_unit_price_medians. This is independent of any
+    discount/sale flag: /deals only ever lists what a retailer itself
+    marked down, so it stays silent on the ordinary-priced item that's
+    simply a good buy for its type. Answers "just show me what's
+    actually cheap" directly, not "what's on sale."
+
+    Every currently-priced listing matching shop/category/q is a
+    candidate; callers narrow with category or q before calling this
+    for anything beyond a single shop's catalog (see the /cheap route's
+    scan guard, same pattern as /compare's COMPARE_SCAN_GUARD_ROWS) --
+    this function does not itself cap the candidate scan.
+
+    Returns (rows, total_count), paginated after ranking best-value
+    first (lowest unit_price / category-median ratio).
+    """
+    ids = [shop_id] if shop_id is not None else list(shop_labels_by_id)
+    if latest is None:
+        full_latest = get_latest_snapshots_for_all_shops(session, list(shop_labels_by_id))
+    else:
+        full_latest = latest
+    id_latest = {sid: snap for sid, snap in full_latest.items() if sid in ids}
+    if not id_latest:
+        return [], 0
+    shop_by_snapshot = {snap.id: (sid, snap.snapshot_date) for sid, snap in id_latest.items()}
+
+    query = session.query(
+        ItemPrice.snapshot_id,
+        ItemPrice.name,
+        ItemPrice.category,
+        ItemPrice.code,
+        ItemPrice.price,
+        ItemPrice.size_info,
+        ItemPrice.metric_unit_description,
+        ItemPrice.product_id,
+    ).filter(
+        ItemPrice.snapshot_id.in_(list(shop_by_snapshot)),
+        ItemPrice.price > 0,
+    )
+    query = _apply_text_filters(query, q=q, category=category)
+
+    candidates = []
+    for snapshot_id, name, cat, code, price, size_info, mud, product_id in query:
+        sid, snapshot_date = shop_by_snapshot[snapshot_id]
+        candidates.append(
+            {
+                "shop_id": sid,
+                "shop_label": shop_labels_by_id[sid],
+                "name": name,
+                "category": cat,
+                "code": code,
+                "price": price,
+                "size_info": size_info,
+                "metric_unit_description": mud,
+                "product_id": product_id,
+                "snapshot_date": snapshot_date,
+            }
+        )
+
+    categories_present = {r["category"] for r in candidates}
+    medians = get_category_unit_price_medians(
+        session, categories_present, shop_labels_by_id, latest=full_latest
+    )
+
+    results = []
+    for r in candidates:
+        unit_price, unit_kind = derive_unit_price(r["price"], r["size_info"], r["metric_unit_description"])
+        median = medians.get((r["category"], unit_kind))
+        if unit_price is None or not median:
+            continue
+        r["unit_price"] = unit_price
+        r["value_ratio"] = unit_price / median
+        r["savings_pct"] = (median - unit_price) / median * 100
+        results.append(r)
+
+    results.sort(key=lambda r: r["value_ratio"])
+
+    total = len(results)
+    last_page = max(1, math.ceil(total / per_page))
+    page = min(max(1, page), last_page)
+    start = (page - 1) * per_page
+    return results[start : start + per_page], total

@@ -41,6 +41,19 @@ def _catalog(items):
     }
 
 
+def _multi_catalog(categories):
+    """categories: {category_name: [items]} -- for tests that need more
+    than one distinct category in a single snapshot."""
+    return {
+        "information": {
+            "title": "Test Shop",
+            "address": {"description": "Test Address 1"},
+            "is_open": True,
+        },
+        "menu": {"categories": [{"name": name, "items": items} for name, items in categories.items()]},
+    }
+
+
 def _item(id_, name, price, **extra):
     d = {"id": id_, "code": f"code-{id_}", "name": name, "price": price, "tags": []}
     d.update(extra)
@@ -1691,3 +1704,81 @@ def test_dashboard_stale_banner_not_masked_by_one_fresh_shop(client):
 
     resp = client.get("/")
     assert "δεδομένα μπορεί να είναι παλιά" in resp.get_data(as_text=True)
+
+
+def test_cheap_ranks_best_value_first(client):
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            TODAY,
+            _catalog(
+                [
+                    _item(1, "Mid Price", 2.0, size_info="1kg"),
+                    _item(2, "Best Value", 1.0, size_info="1kg"),
+                    _item(3, "Priciest", 3.0, size_info="1kg"),
+                ]
+            ),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    body = client.get("/cheap").get_data(as_text=True)
+    assert body.index("Best Value") < body.index("Mid Price") < body.index("Priciest")
+    assert "-50% από τον μέσο όρο" in body  # Best Value: (0.20 - 0.10) / 0.20 * 100
+
+
+def test_cheap_category_filter_narrows_results(client):
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            TODAY,
+            _multi_catalog(
+                {
+                    "Cat A": [
+                        _item(1, "A1", 1.0, size_info="1kg"),
+                        _item(2, "A2", 2.0, size_info="1kg"),
+                        _item(3, "A3", 3.0, size_info="1kg"),
+                    ],
+                    "Cat B": [
+                        _item(4, "B1", 1.0, size_info="1kg"),
+                        _item(5, "B2", 2.0, size_info="1kg"),
+                        _item(6, "B3", 3.0, size_info="1kg"),
+                    ],
+                }
+            ),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    body = client.get("/cheap", query_string={"category": "Cat A"}).get_data(as_text=True)
+    assert "A1" in body and "A2" in body and "A3" in body
+    assert "B1" not in body and "B2" not in body and "B3" not in body
+
+
+def test_cheap_guards_unfiltered_scan_past_threshold(client, seeded, monkeypatch):
+    monkeypatch.setattr("webapp.CHEAP_SCAN_GUARD_ROWS", 1)
+    resp = client.get("/cheap")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "πολύ μεγάλος για κατάταξη" in body
+    assert COMMON_PRODUCT not in body
+
+
+def test_cheap_guard_bypassed_by_category(client, seeded, monkeypatch):
+    monkeypatch.setattr("webapp.CHEAP_SCAN_GUARD_ROWS", 1)
+    resp = client.get("/cheap", query_string={"category": "Τρόφιμα"})
+    body = resp.get_data(as_text=True)
+    assert "πολύ μεγάλος για κατάταξη" not in body
+
+
+def test_cheap_nav_link_present(client):
+    body = client.get("/").get_data(as_text=True)
+    assert 'href="/cheap"' in body
