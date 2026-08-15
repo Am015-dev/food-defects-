@@ -148,6 +148,15 @@ def line_chart(series, height=170, y_zero=True, value_suffix="", area=False):
         while any(abs(y - p) < 14 for p in placed):
             y += 14
         y = min(max(y, PAD_TOP + 6), height - PAD_BOTTOM - 2)
+        # The boundary clamp above can walk a label right back on top of
+        # one already placed near that edge (common with a short chart
+        # and several series landing at the same value, e.g. a flat
+        # average line matching the current price) -- the nudge loop
+        # ran against the unclamped y, so it never saw that collision.
+        # Back off inward until clear, rather than silently overlapping.
+        while any(abs(y - p) < 14 for p in placed) and y > PAD_TOP + 6:
+            y -= 14
+        y = max(y, PAD_TOP + 6)
         placed.append(y)
         # Single series: the chart title names it, so the end label only
         # needs the value. Multi-series: the label carries identity.
