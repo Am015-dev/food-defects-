@@ -456,3 +456,70 @@ def test_composite_indexes_exist_on_item_prices():
         "ix_item_prices_snapshot_product",
     ):
         assert name in index_names
+
+
+# ---------- get_low_confidence_matches ----------
+
+
+def test_get_low_confidence_matches_excludes_confident_matches_worst_first():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog([{"id": 1, "code": "a1", "name": "Anatoli Κουρκουμάς 60g", "price": 1.5, "tags": []}]),
+        )
+        store_snapshot(
+            session,
+            SHOP_B,
+            SHOP_B_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    {"id": 2, "code": "b1", "name": "Κουρκουμάς Anatoli 100g", "price": 1.9, "tags": []},
+                    {"id": 3, "code": "b2", "name": "Κάτι Άλλο 200g", "price": 2.0, "tags": []},
+                ]
+            ),
+        )
+        session.commit()
+
+        from db import ProductListing
+        from queries import get_low_confidence_matches
+
+        b1 = session.query(ProductListing).filter_by(code="b1").one()
+        b2 = session.query(ProductListing).filter_by(code="b2").one()
+        # Force specific values regardless of what real matching produced
+        # -- this test is about the query's filter/order, not the matcher.
+        b1.match_confidence = 0.905  # in the reviewable band
+        b2.match_confidence = 0.999  # above max_confidence, excluded
+        session.commit()
+
+        rows = get_low_confidence_matches(session, max_confidence=0.93)
+        assert len(rows) == 1
+        assert rows[0]["code"] == "b1"
+        assert rows[0]["shop_id"] == SHOP_B
+        assert rows[0]["confidence"] == pytest.approx(0.905)
+    finally:
+        session.close()
+
+
+def test_get_low_confidence_matches_empty_when_none_below_threshold():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog([{"id": 1, "code": "a1", "name": "Anatoli Κουρκουμάς 60g", "price": 1.5, "tags": []}]),
+        )
+        session.commit()
+
+        from queries import get_low_confidence_matches
+
+        # A freshly created product always stores confidence 1.0.
+        assert get_low_confidence_matches(session, max_confidence=0.93) == []
+    finally:
+        session.close()

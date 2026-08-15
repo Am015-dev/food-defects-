@@ -44,6 +44,7 @@ from queries import (
     get_item_history_by_code,
     get_latest_snapshot,
     get_latest_snapshots_for_all_shops,
+    get_low_confidence_matches,
     get_price_drops,
     get_product_across_shops,
     get_shop_bug_rates,
@@ -670,6 +671,22 @@ def compare():
         min_spread=min_spread,
         scan_too_large=scan_too_large,
     )
+
+
+@app.route("/matches")
+def match_review():
+    """Manual review queue for low-confidence cross-shop product
+    matches (see queries.get_low_confidence_matches) -- a bad match
+    here silently corrupts a /compare row across chains, so this
+    exists for the operator to spot-check the fuzzy matcher's residual
+    false-positive band, not for general browsing (not linked from the
+    main nav)."""
+    session = SessionLocal()
+    try:
+        rows = get_low_confidence_matches(session)
+    finally:
+        session.close()
+    return render_template("match_review.html", rows=rows, shop_labels=SHOP_LABELS)
 
 
 @app.route("/search")

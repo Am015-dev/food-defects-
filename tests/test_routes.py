@@ -350,6 +350,28 @@ def test_compare_shows_cross_shop_spread(client, seeded):
     assert "1,68" in body or "1,68 €" in body
 
 
+def test_match_review_page_loads_empty(client, seeded):
+    resp = client.get("/matches")
+    assert resp.status_code == 200
+    assert "Καμία." in resp.get_data(as_text=True)
+
+
+def test_match_review_shows_low_confidence_listing(client, seeded):
+    from db import ProductListing
+
+    session = SessionLocal()
+    try:
+        listing = session.query(ProductListing).first()
+        assert listing is not None
+        listing.match_confidence = 0.91
+        session.commit()
+    finally:
+        session.close()
+
+    body = client.get("/matches").get_data(as_text=True)
+    assert "91.0%" in body
+
+
 def test_compare_groups_differently_phrased_names_across_chains(client):
     # Regression for the product identity layer: two different chains
     # phrasing the same product differently (word order, size format)

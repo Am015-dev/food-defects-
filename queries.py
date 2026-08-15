@@ -9,7 +9,7 @@ from collections import defaultdict
 from sqlalchemy import and_, func, literal, literal_column, or_
 from sqlalchemy.orm import aliased
 
-from db import ItemPrice, Product, Snapshot
+from db import ItemPrice, Product, ProductListing, Snapshot
 from price_utils import fold_name
 
 
@@ -500,6 +500,48 @@ def get_shop_bug_rates(latest, shop_labels_by_id, min_items=1):
         )
     rows.sort(key=lambda r: r["bug_rate"], reverse=True)
     return rows
+
+
+def get_low_confidence_matches(session, max_confidence=0.93, limit=50):
+    """ProductListing rows in the residual false-positive band documented
+    in MISTAKES.md (2026-08-13 entry, "fuzzy product matching used the
+    wrong rapidfuzz scorer") -- match_confidence < 1.0 (an actual fuzzy
+    match against an existing Product, not a freshly created one, which
+    always stores 1.0) and below max_confidence. A bad match here
+    silently corrupts a /compare row across chains, so this is a manual
+    review queue for the operator, worst (lowest-confidence) first.
+
+    max_confidence defaults to 0.93: MATCH_THRESHOLD (product_matching.py)
+    is 90, and the documented residual false-positive band after the
+    token_sort_ratio fix sits at roughly 90.2-92.7, i.e. matches that
+    cleared the threshold but are still worth a human glance.
+    """
+    rows = (
+        session.query(
+            ProductListing.shop_id,
+            ProductListing.code,
+            ProductListing.first_seen_name,
+            ProductListing.match_confidence,
+            Product.canonical_name,
+            Product.category,
+        )
+        .join(Product, Product.id == ProductListing.product_id)
+        .filter(ProductListing.match_confidence < max_confidence)
+        .order_by(ProductListing.match_confidence.asc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "shop_id": shop_id,
+            "code": code,
+            "listing_name": listing_name,
+            "confidence": confidence,
+            "product_name": canonical_name,
+            "category": category,
+        }
+        for shop_id, code, listing_name, confidence, canonical_name, category in rows
+    ]
 
 
 def search_products(

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Έλεγχος αντιστοιχίσεων — Παρατηρητήριο Τιμών{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Έλεγχος αντιστοιχίσεων προϊόντων</h1>
+</div>
+
+<section class="panel" data-aos="fade-up">
+  <p class="meta">{{ rows|length }} αντιστοιχίσεις χαμηλής βεβαιότητας, χειρότερη πρώτα</p>
+  {% if rows %}
+  <div class="table-scroll">
+    <table class="cards-mobile">
+      <thead>
+        <tr><th>Κατάστημα</th><th>Καταχώρηση</th><th>Αντιστοιχίστηκε σε</th><th data-sort>Βεβαιότητα</th></tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td data-label="Κατάστημα"><span class="item-cat">{{ shop_labels.get(r.shop_id, r.shop_id) }}</span></td>
+          <td class="td-main">{% if r.code %}<a href="/item/{{ r.shop_id }}/{{ r.code }}">{{ r.listing_name }}</a>{% else %}{{ r.listing_name }}{% endif %}</td>
+          <td data-label="Αντιστοιχίστηκε σε">{{ r.product_name }} <span class="item-cat">· {{ r.category }}</span></td>
+          <td data-label="Βεβαιότητα" class="num">{{ "%.1f"|format(r.confidence * 100) }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty">Καμία.</div>
+  {% endif %}
+</section>
+
+{% endblock %}
