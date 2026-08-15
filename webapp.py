@@ -47,6 +47,7 @@ from queries import (
     get_categories,
     get_category_page,
     get_category_trend,
+    get_category_unit_price_medians,
     get_cheapest_unit_price_by_product,
     get_deal_streaks,
     get_deals_page,
@@ -62,6 +63,7 @@ from queries import (
     get_product_across_shops,
     get_shop_bug_rates,
     get_trend,
+    is_category_competitive,
     iter_all_bugs,
     iter_all_drops,
     iter_all_sales,
@@ -1500,6 +1502,18 @@ def verify_item(shop_id, code):
         cheaper_elsewhere = _cheaper_elsewhere(
             stored.unit_price if stored else None, shop_id, cheapest_elsewhere_candidate
         )
+        # Same stricter rule as /deals: a real discount off this
+        # listing's own history doesn't earn the ΠΡΟΣΦΟΡΑ/ΣΠΟΥΔΑΙΑ badge
+        # unless the price is also genuinely low for its category right
+        # now -- see queries.is_category_competitive.
+        category_competitive = False
+        if stored is not None and stored.is_verified_deal:
+            medians = get_category_unit_price_medians(
+                session, {stored.category}, SHOP_LABELS, latest=latest
+            )
+            category_competitive = is_category_competitive(
+                stored.price, stored.category, stored.size_info, stored.metric_unit_description, medians
+            )
     finally:
         session.close()
 
@@ -1572,7 +1586,11 @@ def verify_item(shop_id, code):
     except Exception as exc:  # noqa: BLE001
         live_error = _friendly_live_error(exc)
 
-    stored_deal_tier = deal_tier(stored.deal_pct) if stored is not None and stored.deal_pct else None
+    stored_deal_tier = (
+        deal_tier(stored.deal_pct)
+        if stored is not None and stored.deal_pct and category_competitive
+        else None
+    )
 
     return render_template(
         "verify.html",
@@ -1580,6 +1598,7 @@ def verify_item(shop_id, code):
         shop_id=shop_id,
         stored=stored,
         stored_deal_tier=stored_deal_tier,
+        category_competitive=category_competitive,
         snapshot_date=snapshot_date,
         shop_label=SHOP_LABELS[shop_id],
         shop_url=SHOP_URLS.get(shop_id, "https://www.e-food.gr/"),

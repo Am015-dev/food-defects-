@@ -13,11 +13,14 @@ from queries import (
     get_basket_comparison,
     get_category_page,
     get_category_trend,
+    get_category_unit_price_medians,
     get_cheapest_unit_price_by_product,
+    get_deals_page,
     get_new_verified_deals,
     get_price_drops,
     get_price_extremes,
     get_product_across_shops,
+    is_category_competitive,
     iter_all_bugs,
     iter_all_drops,
     search_products,
@@ -1124,8 +1127,15 @@ def test_get_new_verified_deals_counts_first_ever_snapshot_as_new():
                         "name": "Fresh Deal",
                         "price": 3.0,
                         "full_price": 6.0,
+                        "size_info": "3kg",
                         "tags": ["l30d:5.0"],
-                    }
+                    },
+                    # Pricier same-category peers so this also clears the
+                    # category-competitiveness gate (see
+                    # queries.get_category_unit_price_medians), not just
+                    # the plain discount-pct rule.
+                    _item(2, "Peer Item A", 3.0, size_info="500g"),
+                    _item(3, "Peer Item B", 6.0, size_info="1kg"),
                 ]
             ),
         )
@@ -1181,8 +1191,15 @@ def test_get_new_verified_deals_includes_a_deal_that_just_started_today():
                         "name": "Full Price Item",
                         "price": 3.0,
                         "full_price": 6.0,
+                        "size_info": "3kg",
                         "tags": ["l30d:5.0"],
-                    }
+                    },
+                    # Pricier same-category peers so this also clears the
+                    # category-competitiveness gate (see
+                    # queries.get_category_unit_price_medians), not just
+                    # the plain discount-pct rule.
+                    _item(2, "Peer Item A", 3.0, size_info="500g"),
+                    _item(3, "Peer Item B", 6.0, size_info="1kg"),
                 ]
             ),
         )
@@ -1286,5 +1303,166 @@ def test_get_cheapest_unit_price_by_product_omits_products_with_no_unit_price():
         a1 = session.query(ItemPrice).filter_by(code="code-1").one()
         result = get_cheapest_unit_price_by_product(session, [a1.product_id], {SHOP_A: SHOP_A_LABEL})
         assert result == {}
+    finally:
+        session.close()
+
+
+def test_get_category_unit_price_medians_computes_per_kind_median():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    _item(1, "Item A", 1.0, size_info="1kg"),  # 0.10 €/100g
+                    _item(2, "Item B", 2.0, size_info="1kg"),  # 0.20 €/100g
+                    _item(3, "Item C", 3.0, size_info="1kg"),  # 0.30 €/100g
+                    _item(4, "Item D", 4.0, size_info="1kg"),  # 0.40 €/100g
+                ]
+            ),
+        )
+        session.commit()
+
+        medians = get_category_unit_price_medians(session, {"Cat"}, {SHOP_A: SHOP_A_LABEL})
+        assert medians[("Cat", "100g")] == pytest.approx(0.25)  # (0.20 + 0.30) / 2
+    finally:
+        session.close()
+
+
+def test_get_category_unit_price_medians_omits_bucket_below_min_sample():
+    # Only two priced, comparable items in the category -- too few to
+    # trust a median against (see queries.MIN_CATEGORY_SAMPLE).
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    _item(1, "Item A", 1.0, size_info="1kg"),
+                    _item(2, "Item B", 2.0, size_info="1kg"),
+                ]
+            ),
+        )
+        session.commit()
+
+        medians = get_category_unit_price_medians(session, {"Cat"}, {SHOP_A: SHOP_A_LABEL})
+        assert medians == {}
+    finally:
+        session.close()
+
+
+def test_get_category_unit_price_medians_keeps_unit_kinds_separate():
+    # A €/100g bucket and a €/100ml bucket in the same category must not
+    # be pooled into one median -- the scales aren't interchangeable.
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    _item(1, "Weight A", 1.0, size_info="1kg"),  # 0.10 €/100g
+                    _item(2, "Weight B", 2.0, size_info="1kg"),  # 0.20 €/100g
+                    _item(3, "Weight C", 3.0, size_info="1kg"),  # 0.30 €/100g
+                    _item(4, "Volume A", 9.0, size_info="1l"),  # 0.90 €/100ml
+                    _item(5, "Volume B", 10.0, size_info="1l"),  # 1.00 €/100ml
+                    _item(6, "Volume C", 11.0, size_info="1l"),  # 1.10 €/100ml
+                ]
+            ),
+        )
+        session.commit()
+
+        medians = get_category_unit_price_medians(session, {"Cat"}, {SHOP_A: SHOP_A_LABEL})
+        assert medians[("Cat", "100g")] == pytest.approx(0.20)
+        assert medians[("Cat", "100ml")] == pytest.approx(1.00)
+    finally:
+        session.close()
+
+
+def test_is_category_competitive_true_at_or_below_median():
+    medians = {("Cat", "100g"): 0.30}
+    assert is_category_competitive(3.0, "Cat", "1kg", None, medians) is True  # 0.30 €/100g, ties at median
+
+
+def test_is_category_competitive_false_above_median():
+    medians = {("Cat", "100g"): 0.30}
+    assert is_category_competitive(5.0, "Cat", "1kg", None, medians) is False  # 0.50 €/100g
+
+
+def test_is_category_competitive_false_without_a_benchmark():
+    # No entry at all for this (category, kind) -- an unverifiable claim
+    # of cheapness must not default to "competitive".
+    assert is_category_competitive(3.0, "Cat", "1kg", None, {}) is False
+
+
+def test_is_category_competitive_false_with_no_parseable_unit_price():
+    medians = {("Cat", "100g"): 0.30}
+    assert is_category_competitive(3.0, "Cat", None, None, medians) is False
+
+
+def test_get_deals_page_excludes_deal_not_cheap_for_its_category():
+    # The exact scenario a user reported live: an ice cream discounted
+    # deeply off its own history, but still pricier per unit than
+    # ordinary-priced peers in the same category -- it must not surface
+    # as a "good deal" just because the percentage math checks out.
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    # Real 37.5% discount (8.0 -> 5.0), but 0.50 €/100g is
+                    # still the priciest of the category's four listings.
+                    _item(1, "Ice Cream Deal", 5.0, full_price=16.0, size_info="1kg", tags=["l30d:8.0"]),
+                    _item(2, "Peer A", 1.0, size_info="1kg"),  # 0.10 €/100g
+                    _item(3, "Peer B", 2.0, size_info="1kg"),  # 0.20 €/100g
+                    _item(4, "Peer C", 3.0, size_info="1kg"),  # 0.30 €/100g
+                ]
+            ),
+        )
+        session.commit()
+
+        rows, total = get_deals_page(session, {SHOP_A: SHOP_A_LABEL})
+        assert total == 0
+        assert rows == []
+    finally:
+        session.close()
+
+
+def test_get_deals_page_includes_deal_that_is_cheap_for_its_category():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    # Same 37.5% discount, but 0.10 €/100g is now the
+                    # CHEAPEST of the category's four listings.
+                    _item(1, "Ice Cream Deal", 1.0, full_price=3.2, size_info="1kg", tags=["l30d:1.6"]),
+                    _item(2, "Peer A", 3.0, size_info="1kg"),  # 0.30 €/100g
+                    _item(3, "Peer B", 4.0, size_info="1kg"),  # 0.40 €/100g
+                    _item(4, "Peer C", 5.0, size_info="1kg"),  # 0.50 €/100g
+                ]
+            ),
+        )
+        session.commit()
+
+        rows, total = get_deals_page(session, {SHOP_A: SHOP_A_LABEL})
+        assert total == 1
+        assert rows[0]["name"] == "Ice Cream Deal"
     finally:
         session.close()

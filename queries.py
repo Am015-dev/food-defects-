@@ -10,7 +10,7 @@ from sqlalchemy import and_, func, literal, literal_column, or_
 from sqlalchemy.orm import aliased
 
 from db import CategoryDailySummary, ItemPrice, PriceExtreme, Product, ProductListing, Snapshot
-from price_utils import fold_name
+from price_utils import derive_unit_price, fold_name
 
 
 def _apply_text_filters(query, q=None, category=None):
@@ -424,22 +424,41 @@ def get_deals_page(
     per_page=50,
     latest=None,
 ):
-    """One page of verified deals across the latest snapshots, filtered
-    and ordered in SQL. Returns (rows, total_count). Column-only and
-    LIMIT'd -- at most per_page rows are ever materialized.
+    """One page of verified deals across the latest snapshots that are
+    ALSO genuinely cheap for their type, not just discounted from their
+    own history -- see is_category_competitive /
+    get_category_unit_price_medians above. A real percentage cut off an
+    already-overpriced product doesn't qualify: an item marked down 60%
+    that still costs more per kilo than an everyday-priced peer is a
+    real discount and a bad buy at the same time, and badging it a
+    "good price" is exactly the retail trick this tool exists to catch.
+
+    That gate compares against a same-request-computed median rather
+    than a stored column, so it can't be expressed as a portable SQL
+    filter. Verified-deal candidates matching shop/category/q/min_pct
+    are fetched in full instead -- a small set by construction, since
+    only the sharpest discounts are flagged is_verified_deal at ingest
+    time -- then filtered, sorted, and paginated in Python. Returns
+    (rows, total_count): total reflects the post-gate count, not the raw
+    number of (possibly non-competitive) verified-deal rows.
 
     `latest` lets a caller that already ran
     get_latest_snapshots_for_all_shops pass that result straight through
-    instead of this function querying it again from scratch.
+    instead of this function querying it again from scratch. Unlike the
+    shop-filtered lookup below, the category benchmark always draws on
+    every tracked shop -- "cheap for its type" means cheap against the
+    whole market, not just whichever shop the page happens to be
+    filtered to.
     """
     ids = [shop_id] if shop_id is not None else list(shop_labels_by_id)
     if latest is None:
-        latest = get_latest_snapshots_for_all_shops(session, ids)
+        full_latest = get_latest_snapshots_for_all_shops(session, list(shop_labels_by_id))
     else:
-        latest = {sid: snap for sid, snap in latest.items() if sid in ids}
-    if not latest:
+        full_latest = latest
+    id_latest = {sid: snap for sid, snap in full_latest.items() if sid in ids}
+    if not id_latest:
         return [], 0
-    shop_by_snapshot = {snap.id: (sid, snap.snapshot_date) for sid, snap in latest.items()}
+    shop_by_snapshot = {snap.id: (sid, snap.snapshot_date) for sid, snap in id_latest.items()}
 
     query = session.query(
         ItemPrice.snapshot_id,
@@ -461,30 +480,10 @@ def get_deals_page(
     if min_pct:
         query = query.filter(ItemPrice.deal_pct >= min_pct)
 
-    total = query.count()
-
-    if sort == "price":
-        query = query.order_by(ItemPrice.price.asc())
-    elif sort == "unit_price":
-        query = query.order_by(ItemPrice.unit_price.asc().nulls_last())
-    elif sort == "name":
-        query = query.order_by(ItemPrice.name.asc())
-    else:
-        query = query.order_by(ItemPrice.deal_pct.desc())
-
-    # Clamp against the real page count BEFORE querying -- an
-    # out-of-range page (e.g. the last real page was 2 but ?page=999 was
-    # requested) must return that last real page's rows, not run the
-    # query at a huge OFFSET that returns nothing while the caller's
-    # "page N of pages" label still claims real data was shown.
-    last_page = max(1, math.ceil(total / per_page))
-    page = min(max(1, page), last_page)
-    rows = query.offset((page - 1) * per_page).limit(per_page).all()
-
-    results = []
-    for snapshot_id, name, cat, code, price, full_price, pct, unit_price, size_info, mud, product_id in rows:
+    candidates = []
+    for snapshot_id, name, cat, code, price, full_price, pct, unit_price, size_info, mud, product_id in query:
         sid, snapshot_date = shop_by_snapshot[snapshot_id]
-        results.append(
+        candidates.append(
             {
                 "shop_id": sid,
                 "shop_label": shop_labels_by_id[sid],
@@ -502,7 +501,37 @@ def get_deals_page(
                 "snapshot_date": snapshot_date,
             }
         )
-    return results, total
+
+    categories_present = {r["category"] for r in candidates}
+    medians = get_category_unit_price_medians(
+        session, categories_present, shop_labels_by_id, latest=full_latest
+    )
+    results = [
+        r
+        for r in candidates
+        if is_category_competitive(
+            r["price"], r["category"], r["size_info"], r["metric_unit_description"], medians
+        )
+    ]
+
+    if sort == "price":
+        results.sort(key=lambda r: r["price"])
+    elif sort == "unit_price":
+        results.sort(key=lambda r: (r["unit_price"] is None, r["unit_price"]))
+    elif sort == "name":
+        results.sort(key=lambda r: r["name"])
+    else:
+        results.sort(key=lambda r: r["pct"], reverse=True)
+
+    total = len(results)
+    # Clamp against the real page count -- an out-of-range page (e.g.
+    # the last real page was 2 but ?page=999 was requested) must return
+    # that last real page's rows, not an empty slice while the caller's
+    # "page N of pages" label still claims real data was shown.
+    last_page = max(1, math.ceil(total / per_page))
+    page = min(max(1, page), last_page)
+    start = (page - 1) * per_page
+    return results[start : start + per_page], total
 
 
 def get_trend(session, days=30):
@@ -998,19 +1027,22 @@ def iter_all_drops(session, shop_labels_by_id, shop_id=None, q=None, category=No
 
 def get_new_verified_deals(session, shop_labels_by_id, limit=50, latest=None):
     """Verified deals that appeared in a shop's latest snapshot but
-    weren't already a verified deal in its previous one -- the "what's
-    newly on offer today" set a deals feed should announce, as opposed
-    to re-announcing every deal that's simply still running from
-    yesterday. A shop with no previous snapshot yet has nothing to
+    weren't already a verified deal in its previous one, AND are
+    genuinely cheap for their category right now (see
+    is_category_competitive / get_category_unit_price_medians) -- the
+    "what's newly on offer today" set a deals feed should announce, as
+    opposed to re-announcing every deal that's simply still running from
+    yesterday, or one that's discounted but still not a good price for
+    its type. A shop with no previous snapshot yet has nothing to
     compare against, so every one of today's verified deals counts as
-    new for it. Column-only, sorted by discount size, capped at `limit`
-    across all shops combined -- a feed reader has no use for more.
+    new for it. Sorted by discount size, capped at `limit` across all
+    shops combined -- a feed reader has no use for more.
     """
     ids = list(shop_labels_by_id)
     if latest is None:
         latest = get_latest_snapshots_for_all_shops(session, ids)
 
-    results = []
+    candidates = []
     for sid, snap in latest.items():
         label = shop_labels_by_id[sid]
         previous = _get_previous_snapshot(session, sid, snap.snapshot_date)
@@ -1021,6 +1053,8 @@ def get_new_verified_deals(session, shop_labels_by_id, limit=50, latest=None):
             ItemPrice.price,
             ItemPrice.full_price,
             ItemPrice.deal_pct,
+            ItemPrice.size_info,
+            ItemPrice.metric_unit_description,
         ).filter(
             ItemPrice.snapshot_id == snap.id,
             ItemPrice.is_verified_deal.is_(True),
@@ -1032,8 +1066,8 @@ def get_new_verified_deals(session, shop_labels_by_id, limit=50, latest=None):
                 Yesterday,
                 and_(Yesterday.code == ItemPrice.code, Yesterday.snapshot_id == previous.id),
             ).filter(or_(Yesterday.id.is_(None), Yesterday.is_verified_deal.isnot(True)))
-        for name, cat, code, price, full_price, deal_pct in base_query:
-            results.append(
+        for name, cat, code, price, full_price, deal_pct, size_info, mud in base_query:
+            candidates.append(
                 {
                     "shop_id": sid,
                     "shop_label": label,
@@ -1043,9 +1077,21 @@ def get_new_verified_deals(session, shop_labels_by_id, limit=50, latest=None):
                     "price": price,
                     "full_price": full_price,
                     "deal_pct": deal_pct,
+                    "size_info": size_info,
+                    "metric_unit_description": mud,
                     "snapshot_date": snap.snapshot_date,
                 }
             )
+
+    categories_present = {r["category"] for r in candidates}
+    medians = get_category_unit_price_medians(session, categories_present, shop_labels_by_id, latest=latest)
+    results = [
+        r
+        for r in candidates
+        if is_category_competitive(
+            r["price"], r["category"], r["size_info"], r["metric_unit_description"], medians
+        )
+    ]
 
     results.sort(key=lambda r: r["deal_pct"] or 0, reverse=True)
     return results[:limit]
@@ -1264,3 +1310,87 @@ def get_cheapest_unit_price_by_product(session, product_ids, shop_labels_by_id, 
                 "code": code,
             }
     return cheapest
+
+
+# A bucket needs at least this many priced listings before its median
+# means anything -- with fewer, a lone item's "median" is itself, which
+# would trivially call it "cheap for its type" with nothing to compare
+# against. Below this floor, get_category_unit_price_medians omits the
+# bucket entirely rather than return a meaningless single-point median.
+MIN_CATEGORY_SAMPLE = 3
+
+
+def get_category_unit_price_medians(session, categories, shop_labels_by_id, latest=None):
+    """For each (category, unit-price kind) pair -- e.g. ("Τρόφιμα ||
+    Παγωτά", "100g") -- the median per-unit price currently on shelf
+    across every tracked shop's latest snapshot. This is the "is this
+    actually cheap for its type" benchmark a raw discount percentage
+    can't provide: a real price cut off an already-overpriced product is
+    still an overpriced product.
+
+    Kinds ("100g" vs "100ml" vs a literal count unit like "τεμ") are
+    kept separate because those scales aren't interchangeable -- see
+    price_utils.derive_unit_price. unit_kind isn't a stored column (it
+    used to be, and was dropped for being write-only -- see db.py's
+    _drop_removed_columns), so it's re-derived here from the
+    still-stored size_info/metric_unit_description; that's the exact
+    same pure function ingest.py already ran to produce the stored
+    unit_price, so the two never disagree.
+
+    One query across every shop's latest snapshot for the whole batch of
+    categories, not one per category.
+
+    Returns {(category, unit_kind): median_unit_price}, omitting any
+    bucket with fewer than MIN_CATEGORY_SAMPLE comparable priced items.
+    """
+    categories = {c for c in categories if c}
+    if not categories:
+        return {}
+    if latest is None:
+        latest = get_latest_snapshots_for_all_shops(session, list(shop_labels_by_id))
+    if not latest:
+        return {}
+    snapshot_ids = [snap.id for snap in latest.values()]
+
+    rows = session.query(
+        ItemPrice.category,
+        ItemPrice.price,
+        ItemPrice.size_info,
+        ItemPrice.metric_unit_description,
+    ).filter(
+        ItemPrice.snapshot_id.in_(snapshot_ids),
+        ItemPrice.category.in_(list(categories)),
+        ItemPrice.price > 0,
+    )
+
+    buckets = defaultdict(list)
+    for category, price, size_info, metric_unit_description in rows:
+        unit_price, unit_kind = derive_unit_price(price, size_info, metric_unit_description)
+        if unit_price is not None:
+            buckets[(category, unit_kind)].append(unit_price)
+
+    medians = {}
+    for key, values in buckets.items():
+        if len(values) < MIN_CATEGORY_SAMPLE:
+            continue
+        values.sort()
+        n = len(values)
+        mid = n // 2
+        medians[key] = values[mid] if n % 2 else (values[mid - 1] + values[mid]) / 2
+    return medians
+
+
+def is_category_competitive(price, category, size_info, metric_unit_description, medians):
+    """True if this listing's own per-unit price is at or below the
+    median for its (category, unit-kind) bucket in `medians` (see
+    get_category_unit_price_medians above) -- i.e. genuinely cheap for
+    its type, not just discounted from its own history. False, not
+    "unknown", when there's no comparable bucket at all: an unverifiable
+    claim of cheapness shouldn't be badged as one."""
+    unit_price, unit_kind = derive_unit_price(price, size_info, metric_unit_description)
+    if unit_price is None:
+        return False
+    median = medians.get((category, unit_kind))
+    if median is None:
+        return False
+    return unit_price <= median

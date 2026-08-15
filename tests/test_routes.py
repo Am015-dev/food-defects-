@@ -79,11 +79,17 @@ def seeded():
                     ),
                     _item(2, "Μηδενική Τιμή", 0.0),
                     _item(3, "Πλασματική Τιμή", 2.0, tags=["l30d:0.01"]),
+                    # size_info well below the category's other listings
+                    # so this clears the category-competitiveness gate
+                    # (see queries.get_category_unit_price_medians) as
+                    # well as the plain discount-pct rule: 0.10€/100g
+                    # against COMMON_PRODUCT's 0.336/0.42€/100g.
                     _item(
                         4,
                         "Πραγματική Προσφορά",
                         3.0,
                         full_price=6.0,
+                        size_info="3kg",
                         tags=["l30d:5.0"],
                     ),
                 ]
@@ -153,7 +159,13 @@ def seeded_with_misleading_deal():
     product_matching.py -- sells for meaningfully less per kilo in shop
     B at an everyday, non-discounted price. The scenario the user
     reported: a "good price" badge that's true by percentage but still
-    not the best per-unit price around."""
+    not the best per-unit price around.
+
+    Two unrelated, pricier ice creams are seeded alongside so the deal
+    also clears the category-competitiveness gate (see
+    queries.get_category_unit_price_medians) -- 0.5€/100g against a
+    [0.3, 0.5, 0.9, 1.1] category bucket, median 0.7 -- while still
+    costing more per unit than its own identical match in shop B."""
     session = SessionLocal()
     try:
         store_snapshot(
@@ -171,6 +183,7 @@ def seeded_with_misleading_deal():
                         size_info="1kg",
                         tags=["l30d:8.0"],
                     ),
+                    _item(2, "Παγωτό Σοκολάτα Οικογενειακό 1kg", 9.0, size_info="1kg"),
                 ]
             ),
         )
@@ -179,7 +192,12 @@ def seeded_with_misleading_deal():
             SHOP_B,
             SHOP_B_LABEL,
             TODAY,
-            _catalog([_item(101, MISLEADING_DEAL_PRODUCT_B, 3.0, size_info="1kg")]),
+            _catalog(
+                [
+                    _item(101, MISLEADING_DEAL_PRODUCT_B, 3.0, size_info="1kg"),
+                    _item(102, "Παγωτό Φράουλα Οικογενειακό 1kg", 11.0, size_info="1kg"),
+                ]
+            ),
         )
         session.commit()
     finally:
@@ -360,7 +378,14 @@ def test_dashboard_hero_picks_larger_percentage_between_deal_and_drop(client):
             _catalog(
                 [
                     _item(1, "Dropping Item", 7.5),
-                    _item(2, "Huge Deal Item", 2.0, full_price=8.0, tags=["l30d:5.0"]),
+                    # size_info + two pricier same-category peers so this
+                    # clears the category-competitiveness gate (see
+                    # queries.get_category_unit_price_medians) as well as
+                    # the plain discount-pct rule -- 0.2€/100g against a
+                    # [0.2, 0.6, 0.6] bucket median of 0.6.
+                    _item(2, "Huge Deal Item", 2.0, full_price=8.0, size_info="1kg", tags=["l30d:5.0"]),
+                    _item(3, "Peer Item A", 3.0, size_info="500g"),
+                    _item(4, "Peer Item B", 6.0, size_info="1kg"),
                 ]
             ),
         )
@@ -479,6 +504,46 @@ def test_deals_no_caveat_for_deal_without_a_cheaper_match(client, seeded):
     # shop at all -- nothing to compare against, so no caveat.
     body = client.get("/deals").get_data(as_text=True)
     assert "⚠ Φθηνότερα ανά μονάδα" not in body
+
+
+def test_deals_and_dashboard_omit_deal_not_cheap_for_its_category(client):
+    # A real discount off its own history, but still the priciest listing
+    # in its category, must not appear as a "good deal" anywhere it's
+    # advertised -- not the /deals list, not the dashboard bargains
+    # table or hero.
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            TODAY,
+            _catalog(
+                [
+                    _item(
+                        1,
+                        "Ice Cream Deal",
+                        5.0,
+                        full_price=16.0,
+                        size_info="1kg",
+                        tags=["l30d:8.0"],
+                    ),
+                    _item(2, "Peer A", 1.0, size_info="1kg"),
+                    _item(3, "Peer B", 2.0, size_info="1kg"),
+                    _item(4, "Peer C", 3.0, size_info="1kg"),
+                ]
+            ),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    deals_body = client.get("/deals").get_data(as_text=True)
+    assert "Ice Cream Deal" not in deals_body
+
+    dashboard_body = client.get("/").get_data(as_text=True)
+    assert "Ice Cream Deal" not in dashboard_body
+    assert "Καλύτερη προσφορά σήμερα" not in dashboard_body
 
 
 def test_deals_out_of_range_page_shows_real_rows_not_empty(client, seeded):
@@ -811,18 +876,27 @@ def test_deals_category_link_points_at_category_browse(client, seeded):
 
 
 def test_deals_shows_streak_badge_for_multi_day_verified_deal(client):
+    # size_info + two pricier same-category peers so this clears the
+    # category-competitiveness gate (see
+    # queries.get_category_unit_price_medians), not just the plain
+    # discount-pct rule.
     item = {
         "id": 1,
         "code": "c1",
         "name": "Streak Deal",
         "price": 3.0,
         "full_price": 6.0,
+        "size_info": "1kg",
         "tags": ["l30d:5.0"],
     }
+    peers = [
+        _item(2, "Peer Item A", 3.0, size_info="500g"),
+        _item(3, "Peer Item B", 6.0, size_info="1kg"),
+    ]
     session = SessionLocal()
     try:
-        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-12", _catalog([item]))
-        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-13", _catalog([item]))
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-12", _catalog([item, *peers]))
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-13", _catalog([item, *peers]))
         session.commit()
     finally:
         session.close()
@@ -1336,6 +1410,45 @@ def test_item_page_flags_verified_deal_that_is_pricier_per_unit_elsewhere(
     assert "Ακριβό ανά μονάδα" in body
     assert SHOP_B_LABEL in body
     assert f"/item/{SHOP_B}/code-101" in body
+
+
+def test_item_page_hides_badge_and_explains_deal_not_cheap_for_category(client, monkeypatch):
+    # Same scenario as queries.test_get_deals_page_excludes_deal_not_cheap_for_its_category,
+    # exercised through the item page: a real discount off its own
+    # history, but still the priciest listing in its category -- the
+    # ΣΠΟΥΔΑΙΑ/ΠΡΟΣΦΟΡΑ badge must not appear, and the disclosure must
+    # say why instead of claiming "Προσφορά".
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            TODAY,
+            _catalog(
+                [
+                    _item(
+                        1,
+                        "Ice Cream Deal",
+                        5.0,
+                        full_price=16.0,
+                        size_info="1kg",
+                        tags=["l30d:8.0"],
+                    ),
+                    _item(2, "Peer A", 1.0, size_info="1kg"),
+                    _item(3, "Peer B", 2.0, size_info="1kg"),
+                    _item(4, "Peer C", 3.0, size_info="1kg"),
+                ]
+            ),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    _stub_live(monkeypatch, price=5.0)
+    body = client.get(f"/item/{SHOP_A}/code-1").get_data(as_text=True)
+    assert "ΣΠΟΥΔΑΙΑ ΠΡΟΣΦΟΡΑ" not in body
+    assert "Όχι πραγματικά φθηνό" in body
 
 
 def test_item_page_no_disclosure_for_unflagged_item(client, seeded, monkeypatch):
