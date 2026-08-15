@@ -12,6 +12,8 @@ import secrets
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from email.utils import format_datetime
+from xml.sax.saxutils import escape as xml_escape
 
 import requests
 from flask import (
@@ -48,6 +50,7 @@ from queries import (
     get_latest_snapshot,
     get_latest_snapshots_for_all_shops,
     get_low_confidence_matches,
+    get_new_verified_deals,
     get_price_drops,
     get_product_across_shops,
     get_shop_bug_rates,
@@ -1114,6 +1117,59 @@ def download_drops_csv():
         mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=food_defects_drops.csv"},
     )
+
+
+@app.route("/feed.xml")
+def deals_feed():
+    """RSS 2.0 feed of verified deals that are newly on offer as of the
+    latest snapshot -- built by hand rather than pulling in a feed-
+    generation library, since a ~15-field XML template is well within
+    what the stdlib's own escaping utility can do safely without adding
+    a dependency (and its C-extension transitive deps) for it."""
+    base_url = request.url_root.rstrip("/")
+    session = SessionLocal()
+    try:
+        deals = get_new_verified_deals(session, SHOP_LABELS, limit=50)
+    finally:
+        session.close()
+
+    items_xml = []
+    for d in deals:
+        item_url = f"{base_url}/item/{d['shop_id']}/{d['code']}"
+        try:
+            snap_dt = datetime.strptime(d["snapshot_date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            pub_date = format_datetime(snap_dt)
+        except ValueError:
+            pub_date = None
+        pct = f'{d["deal_pct"]:.0f}%' if d["deal_pct"] is not None else "?"
+        description = f"{d['shop_label']} · {d['category'] or ''} · {d['price']:.2f}€"
+        if d.get("full_price"):
+            description += f" (ήταν {d['full_price']:.2f}€)"
+        items_xml.append(
+            "<item>"
+            f"<title>{xml_escape(d['name'])} — {xml_escape(pct)} έκπτωση</title>"
+            f"<link>{xml_escape(item_url)}</link>"
+            f"<guid isPermaLink=\"true\">{xml_escape(item_url)}</guid>"
+            + (f"<pubDate>{xml_escape(pub_date)}</pubDate>" if pub_date else "")
+            + f"<description>{xml_escape(description)}</description>"
+            "</item>"
+        )
+
+    feed_url = f"{base_url}/feed.xml"
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">'
+        "<channel>"
+        "<title>Νέες προσφορές — Παρατηρητήριο Τιμών</title>"
+        f"<link>{xml_escape(base_url)}/deals</link>"
+        f'<atom:link href="{xml_escape(feed_url)}" rel="self" type="application/rss+xml" />'
+        "<description>Επαληθευμένες προσφορές που εμφανίστηκαν σήμερα, "
+        "στα σουπερμάρκετ που παρακολουθούμε.</description>"
+        "<language>el</language>"
+        + "".join(items_xml)
+        + "</channel></rss>"
+    )
+    return Response(xml, mimetype="application/rss+xml")
 
 
 def _live_l30d(live):

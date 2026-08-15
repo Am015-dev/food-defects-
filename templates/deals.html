@@ -48,7 +48,8 @@
 
 <section class="panel" data-aos="fade-up">
   <p class="meta">{{ total }} προσφορές{% if total %} · σελίδα {{ page }} από {{ pages }}{% endif %}
-    · <a href="{{ url_for('download_sales_csv', shop_id=shop_filter, q=q, category=category) }}">Λήψη CSV →</a></p>
+    · <a href="{{ url_for('download_sales_csv', shop_id=shop_filter, q=q, category=category) }}">Λήψη CSV →</a>
+    · <a href="{{ url_for('deals_feed') }}">RSS →</a></p>
   {% if rows %}
   <div class="table-scroll">
     <table class="cards-mobile">

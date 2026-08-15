@@ -11,6 +11,7 @@ from queries import (
     compare_across_shops,
     deal_tier,
     get_category_page,
+    get_new_verified_deals,
     get_price_drops,
     get_product_across_shops,
     iter_all_bugs,
@@ -788,6 +789,92 @@ def test_get_category_page_matches_top_level_group_prefix():
         rows, total = get_category_page(session, {SHOP_A: SHOP_A_LABEL}, "Τρόφιμα")
         assert total == 1
         assert rows[0]["name"] == "Pasta"
+    finally:
+        session.close()
+
+
+def test_get_new_verified_deals_counts_first_ever_snapshot_as_new():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    {
+                        "id": 1,
+                        "code": "c1",
+                        "name": "Fresh Deal",
+                        "price": 3.0,
+                        "full_price": 6.0,
+                        "tags": ["l30d:5.0"],
+                    }
+                ]
+            ),
+        )
+        session.commit()
+
+        deals = get_new_verified_deals(session, {SHOP_A: SHOP_A_LABEL})
+        assert [d["name"] for d in deals] == ["Fresh Deal"]
+    finally:
+        session.close()
+
+
+def test_get_new_verified_deals_excludes_deals_still_running_from_yesterday():
+    session = SessionLocal()
+    try:
+        item = {
+            "id": 1,
+            "code": "c1",
+            "name": "Ongoing Deal",
+            "price": 3.0,
+            "full_price": 6.0,
+            "tags": ["l30d:5.0"],
+        }
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-12", _catalog([item]))
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-13", _catalog([item]))
+        session.commit()
+
+        deals = get_new_verified_deals(session, {SHOP_A: SHOP_A_LABEL})
+        assert deals == []
+    finally:
+        session.close()
+
+
+def test_get_new_verified_deals_includes_a_deal_that_just_started_today():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-12",
+            _catalog([{"id": 1, "code": "c1", "name": "Full Price Item", "price": 6.0, "tags": []}]),
+        )
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    {
+                        "id": 1,
+                        "code": "c1",
+                        "name": "Full Price Item",
+                        "price": 3.0,
+                        "full_price": 6.0,
+                        "tags": ["l30d:5.0"],
+                    }
+                ]
+            ),
+        )
+        session.commit()
+
+        deals = get_new_verified_deals(session, {SHOP_A: SHOP_A_LABEL})
+        assert [d["name"] for d in deals] == ["Full Price Item"]
     finally:
         session.close()
 

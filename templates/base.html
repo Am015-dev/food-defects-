@@ -7,6 +7,7 @@
 <meta name="description" content="Σφάλματα τιμών και επαληθευμένες προσφορές στα σούπερ μάρκετ γύρω από το Χαλάνδρι, μέσω του δημόσιου API του e-food.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛒</text></svg>">
 <link rel="preconnect" href="https://cdn.e-food.gr">
+<link rel="alternate" type="application/rss+xml" title="Νέες προσφορές" href="{{ url_for('deals_feed') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='vendor/aos.css') }}">
 {# The "js" class gates AOS's hidden initial states: aos.css unconditionally

@@ -960,3 +960,58 @@ def iter_all_drops(session, shop_labels_by_id, shop_id=None, q=None, category=No
                 "drop_pct": drop_pct,
                 "snapshot_date": snapshot_date,
             }
+
+
+def get_new_verified_deals(session, shop_labels_by_id, limit=50, latest=None):
+    """Verified deals that appeared in a shop's latest snapshot but
+    weren't already a verified deal in its previous one -- the "what's
+    newly on offer today" set a deals feed should announce, as opposed
+    to re-announcing every deal that's simply still running from
+    yesterday. A shop with no previous snapshot yet has nothing to
+    compare against, so every one of today's verified deals counts as
+    new for it. Column-only, sorted by discount size, capped at `limit`
+    across all shops combined -- a feed reader has no use for more.
+    """
+    ids = list(shop_labels_by_id)
+    if latest is None:
+        latest = get_latest_snapshots_for_all_shops(session, ids)
+
+    results = []
+    for sid, snap in latest.items():
+        label = shop_labels_by_id[sid]
+        previous = _get_previous_snapshot(session, sid, snap.snapshot_date)
+        base_query = session.query(
+            ItemPrice.name,
+            ItemPrice.category,
+            ItemPrice.code,
+            ItemPrice.price,
+            ItemPrice.full_price,
+            ItemPrice.deal_pct,
+        ).filter(
+            ItemPrice.snapshot_id == snap.id,
+            ItemPrice.is_verified_deal.is_(True),
+            ItemPrice.code.isnot(None),
+        )
+        if previous is not None:
+            Yesterday = aliased(ItemPrice)
+            base_query = base_query.outerjoin(
+                Yesterday,
+                and_(Yesterday.code == ItemPrice.code, Yesterday.snapshot_id == previous.id),
+            ).filter(or_(Yesterday.id.is_(None), Yesterday.is_verified_deal.isnot(True)))
+        for name, cat, code, price, full_price, deal_pct in base_query:
+            results.append(
+                {
+                    "shop_id": sid,
+                    "shop_label": label,
+                    "name": name,
+                    "category": cat,
+                    "code": code,
+                    "price": price,
+                    "full_price": full_price,
+                    "deal_pct": deal_pct,
+                    "snapshot_date": snap.snapshot_date,
+                }
+            )
+
+    results.sort(key=lambda r: r["deal_pct"] or 0, reverse=True)
+    return results[:limit]

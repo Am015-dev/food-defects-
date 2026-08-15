@@ -1,6 +1,7 @@
 """Flask test-client smoke tests: every route, plus representative filter
 combinations, against a small seeded SQLite database."""
 
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 import pytest
@@ -560,6 +561,47 @@ def test_category_browse_out_of_range_page_shows_real_rows_not_empty(client, see
 def test_deals_category_link_points_at_category_browse(client, seeded):
     body = client.get("/deals").get_data(as_text=True)
     assert "/category/" in body
+
+
+def test_feed_xml_lists_verified_deal(client, seeded):
+    resp = client.get("/feed.xml")
+    assert resp.status_code == 200
+    assert resp.mimetype == "application/rss+xml"
+    body = resp.get_data(as_text=True)
+    assert "<rss" in body
+    assert "Πραγματική Προσφορά" in body  # seeded's verified deal
+    assert "Μηδενική Τιμή" not in body  # a bug, not a deal -- must not leak in
+    ET.fromstring(body)  # well-formed XML
+
+
+def test_feed_xml_advertised_in_page_head(client):
+    body = client.get("/").get_data(as_text=True)
+    assert 'type="application/rss+xml"' in body
+    assert "/feed.xml" in body
+
+
+def test_feed_xml_omits_deal_still_running_from_yesterday():
+    item = {
+        "id": 1,
+        "code": "c1",
+        "name": "Stale Deal",
+        "price": 3.0,
+        "full_price": 6.0,
+        "tags": ["l30d:5.0"],
+    }
+    session = SessionLocal()
+    try:
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-12", _catalog([item]))
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-13", _catalog([item]))
+        session.commit()
+    finally:
+        session.close()
+
+    from webapp import app
+
+    with app.test_client() as c:
+        body = c.get("/feed.xml").get_data(as_text=True)
+    assert "Stale Deal" not in body
 
 
 @pytest.mark.parametrize(
