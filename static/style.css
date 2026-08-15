@@ -245,7 +245,7 @@ details.section ul.items li { font-size: 13.5px; }
 
 /* ---------- Controls ---------- */
 
-input, select, button {
+input, select, button, textarea {
   font: inherit;
   color: var(--text);
   background: var(--panel-2);
@@ -254,10 +254,11 @@ input, select, button {
   padding: 9px 12px;
   min-height: 42px;
 }
-input::placeholder { color: var(--muted); }
+input::placeholder, textarea::placeholder { color: var(--muted); }
 select { padding-right: 30px; }
 button { cursor: pointer; }
 button:hover { border-color: var(--accent); }
+textarea { width: 100%; max-width: 480px; resize: vertical; }
 
 .filters {
   display: grid;

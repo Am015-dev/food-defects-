@@ -38,8 +38,10 @@ from efood_client import fetch_menu_item, menu_item_url
 from price_analysis import MIN_VERIFIED_DEAL_PCT, PLACEHOLDER_THRESHOLD_EUR
 from price_utils import get_price_comparison_info
 from queries import (
+    BASKET_MAX_ITEMS,
     compare_across_shops,
     deal_tier,
+    get_basket_comparison,
     get_bug_streaks,
     get_categories,
     get_category_page,
@@ -699,6 +701,58 @@ def compare():
         category=category,
         min_spread=min_spread,
         scan_too_large=scan_too_large,
+    )
+
+
+@app.route("/basket")
+def basket():
+    """Paste a shopping list, one product per line; see each shop's
+    running total for what it actually stocks, plus the cheapest
+    possible total if each line is bought at whichever shop has it
+    cheapest. Free-text lines, matched the same way /search matches a
+    query -- not existing Product ids, since a basket is written before
+    anyone's picked which listing they mean."""
+    raw = request.args.get("items", "")
+    seen = set()
+    terms = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line in seen:
+            continue
+        seen.add(line)
+        terms.append(line)
+    truncated = len(terms) > BASKET_MAX_ITEMS
+    terms = terms[:BASKET_MAX_ITEMS]
+
+    result = {"lines": [], "shop_totals": [], "split": None}
+    if terms:
+        session = SessionLocal()
+        try:
+            latest = get_latest_snapshots_for_all_shops(session, list(SHOP_LABELS))
+            result = get_basket_comparison(session, SHOP_LABELS, terms, latest=latest)
+        finally:
+            session.close()
+
+    # Each line's matches come back as a {shop_id: {...}} dict -- the
+    # template just needs them as rows sorted cheapest-first, same shape
+    # compare.html already renders per product group.
+    display_lines = []
+    for line in result["lines"]:
+        rows = sorted(
+            ({"shop_id": sid, "shop_label": SHOP_LABELS[sid], **m} for sid, m in line["matches"].items()),
+            key=lambda r: r["price"],
+        )
+        display_lines.append({"term": line["term"], "rows": rows, "low": rows[0]["price"] if rows else None})
+
+    return render_template(
+        "basket.html",
+        raw_items=raw,
+        terms=terms,
+        truncated=truncated,
+        max_items=BASKET_MAX_ITEMS,
+        lines=display_lines,
+        shop_totals=result["shop_totals"],
+        split=result["split"],
     )
 
 

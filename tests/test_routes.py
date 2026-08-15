@@ -394,6 +394,44 @@ def test_match_review_shows_low_confidence_listing(client, seeded):
     assert "91.0%" in body
 
 
+def test_basket_empty_shows_form_only(client):
+    resp = client.get("/basket")
+    assert resp.status_code == 200
+    assert "Καλάθι" in resp.get_data(as_text=True) or "καλάθ" in resp.get_data(as_text=True).lower()
+
+
+def test_basket_matches_items_across_shops(client, seeded):
+    # COMMON_PRODUCT is seeded in both shop A (1.68) and shop B (2.10).
+    resp = client.get("/basket", query_string={"items": COMMON_PRODUCT})
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert COMMON_PRODUCT in body
+    assert SHOP_A_LABEL in body
+    assert SHOP_B_LABEL in body
+
+
+def test_basket_dedupes_and_ignores_blank_lines(client, seeded):
+    resp = client.get("/basket", query_string={"items": f"{COMMON_PRODUCT}\n\n{COMMON_PRODUCT}\n  \n"})
+    assert resp.status_code == 200
+    # One product line rendered once, not twice, despite the duplicate.
+    assert resp.get_data(as_text=True).count(f"<h3>{COMMON_PRODUCT}</h3>") == 1
+
+
+def test_basket_truncates_past_max_items(client, seeded):
+    from queries import BASKET_MAX_ITEMS
+
+    items = "\n".join(f"nonexistent-item-{i}" for i in range(BASKET_MAX_ITEMS + 5))
+    resp = client.get("/basket", query_string={"items": items})
+    assert resp.status_code == 200
+    assert "πρώτες" in resp.get_data(as_text=True)  # truncation notice
+
+
+def test_basket_no_match_shows_empty_state(client, seeded):
+    resp = client.get("/basket", query_string={"items": "nothing matches this at all"})
+    body = resp.get_data(as_text=True)
+    assert "Δεν βρέθηκε" in body
+
+
 def test_compare_groups_differently_phrased_names_across_chains(client):
     # Regression for the product identity layer: two different chains
     # phrasing the same product differently (word order, size format)

@@ -25,6 +25,7 @@
       <a href="/deals" {% if request.path == '/deals' %}aria-current="page"{% endif %}>Προσφορές</a>
       <a href="/drops" {% if request.path == '/drops' %}aria-current="page"{% endif %}>Πτώσεις τιμών</a>
       <a href="/compare" {% if request.path == '/compare' %}aria-current="page"{% endif %}>Σύγκριση</a>
+      <a href="/basket" {% if request.path == '/basket' %}aria-current="page"{% endif %}>Καλάθι</a>
     </nav>
     <form class="shop-jump" action="/shop" method="get">
       <select name="shop" data-jump="/shop/SHOP" aria-label="Μετάβαση σε κατάστημα">

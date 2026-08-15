@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Καλάθι — Παρατηρητήριο Τιμών{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Σύγκριση καλαθιού</h1>
+</div>
+
+<section class="panel" data-aos="fade-up">
+  <form method="get" action="/basket">
+    <label>Λίστα αγορών (ένα προϊόν ανά γραμμή, έως {{ max_items }})
+      <textarea name="items" rows="6" placeholder="π.χ.&#10;γάλα&#10;ψωμί&#10;ελαιόλαδο">{{ raw_items }}</textarea>
+    </label>
+    <button type="submit">Σύγκριση</button>
+  </form>
+  {% if truncated %}
+  <p class="meta">Χρησιμοποιήθηκαν μόνο οι πρώτες {{ max_items }} γραμμές.</p>
+  {% endif %}
+</section>
+
+{% if terms %}
+
+{% if split %}
+<section class="panel" data-aos="fade-up">
+  <h2>Καλύτερος συνδυασμός</h2>
+  <p class="meta">Αγοράζοντας κάθε προϊόν από το φθηνότερο κατάστημα: <span class="price-now">{{ split.total|eur }}</span>
+    · {{ split.shops_needed }} κατάστημα{{ "τα" if split.shops_needed != 1 else "" }}
+    {% if split.savings_vs_best_single_shop is not none and split.savings_vs_best_single_shop > 0 %}
+    · <span class="badge good">-{{ split.savings_vs_best_single_shop|eur }} έναντι ενός καταστήματος</span>
+    {% endif %}
+  </p>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Προϊόν</th><th>Κατάστημα</th><th data-sort>Τιμή</th></tr></thead>
+      <tbody>
+        {% for sl in split.lines %}
+        <tr>
+          <td class="td-main">{% if sl.code %}<a href="/item/{{ sl.shop_id }}/{{ sl.code }}">{{ sl.name }}</a>{% else %}{{ sl.name }}{% endif %}</td>
+          <td>{{ sl.shop_label }}</td>
+          <td class="price-now">{{ sl.price|eur }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+{% if shop_totals %}
+<section class="panel" data-aos="fade-up">
+  <h2>Σύνολο ανά κατάστημα</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Κατάστημα</th><th>Βρέθηκαν</th><th data-sort>Σύνολο</th></tr></thead>
+      <tbody>
+        {% for s in shop_totals %}
+        <tr>
+          <td>{{ s.shop_label }}</td>
+          <td data-label="Βρέθηκαν">{{ s.found_count }}/{{ terms|length }}{% if s.missing_count %} <span class="item-cat">({{ s.missing_count }} λείπουν)</span>{% endif %}</td>
+          <td data-label="Σύνολο" class="{{ 'price-now' if loop.first else 'num' }}">{{ s.total|eur }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% else %}
+<section class="panel" data-aos="fade-up">
+  <div class="empty">Δεν βρέθηκε κανένα από τα προϊόντα σε κανένα κατάστημα.</div>
+</section>
+{% endif %}
+
+{% for line in lines %}
+<section class="panel" data-aos="fade-up">
+  <h3>{{ line.term }}</h3>
+  {% if line.rows %}
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Κατάστημα</th><th>Προϊόν</th><th data-sort>Τιμή</th></tr></thead>
+      <tbody>
+        {% for row in line.rows %}
+        <tr>
+          <td>{{ row.shop_label }}</td>
+          <td>{% if row.code %}<a href="/item/{{ row.shop_id }}/{{ row.code }}">{{ row.name }}</a>{% else %}{{ row.name }}{% endif %}</td>
+          <td class="{{ 'price-now' if row.price == line.low else 'num' }}">{{ row.price|eur }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty">Δεν βρέθηκε σε κανένα κατάστημα.</div>
+  {% endif %}
+</section>
+{% endfor %}
+
+{% endif %}
+
+{% endblock %}

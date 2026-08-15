@@ -10,6 +10,7 @@ from ingest import store_snapshot
 from queries import (
     compare_across_shops,
     deal_tier,
+    get_basket_comparison,
     get_category_page,
     get_new_verified_deals,
     get_price_drops,
@@ -789,6 +790,88 @@ def test_get_category_page_matches_top_level_group_prefix():
         rows, total = get_category_page(session, {SHOP_A: SHOP_A_LABEL}, "Τρόφιμα")
         assert total == 1
         assert rows[0]["name"] == "Pasta"
+    finally:
+        session.close()
+
+
+def test_get_basket_comparison_splits_across_cheapest_shops():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    {"id": 1, "code": "c1", "name": "Milk A", "price": 1.5, "tags": []},
+                    {"id": 2, "code": "c2", "name": "Bread A", "price": 2.0, "tags": []},
+                ]
+            ),
+        )
+        store_snapshot(
+            session,
+            SHOP_B,
+            SHOP_B_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    {"id": 3, "code": "c3", "name": "Milk B", "price": 1.0, "tags": []},
+                    {"id": 4, "code": "c4", "name": "Bread B", "price": 3.0, "tags": []},
+                ]
+            ),
+        )
+        session.commit()
+
+        shops = {SHOP_A: SHOP_A_LABEL, SHOP_B: SHOP_B_LABEL}
+        result = get_basket_comparison(session, shops, ["Milk", "Bread"])
+        assert result["split"] is not None
+        # Milk is cheaper at B (1.0), bread is cheaper at A (2.0) -- the
+        # split should pick each line's own cheapest shop, not one shop
+        # for everything.
+        assert result["split"]["total"] == pytest.approx(3.0)
+        assert result["split"]["shops_needed"] == 2
+
+        shop_a_total = next(s for s in result["shop_totals"] if s["shop_id"] == SHOP_A)
+        assert shop_a_total["total"] == pytest.approx(3.5)  # Milk A + Bread A
+        assert shop_a_total["found_count"] == 2
+    finally:
+        session.close()
+
+
+def test_get_basket_comparison_no_split_when_a_line_has_no_match():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog([{"id": 1, "code": "c1", "name": "Milk", "price": 1.5, "tags": []}]),
+        )
+        session.commit()
+
+        result = get_basket_comparison(session, {SHOP_A: SHOP_A_LABEL}, ["Milk", "nothing matches this"])
+        assert result["split"] is None
+        assert result["lines"][1]["matches"] == {}
+    finally:
+        session.close()
+
+
+def test_get_basket_comparison_ignores_zero_price_bug_rows():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog([{"id": 1, "code": "c1", "name": "Broken Item", "price": 0.0, "tags": []}]),
+        )
+        session.commit()
+
+        result = get_basket_comparison(session, {SHOP_A: SHOP_A_LABEL}, ["Broken"])
+        assert result["lines"][0]["matches"] == {}
     finally:
         session.close()
 

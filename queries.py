@@ -1015,3 +1015,91 @@ def get_new_verified_deals(session, shop_labels_by_id, limit=50, latest=None):
 
     results.sort(key=lambda r: r["deal_pct"] or 0, reverse=True)
     return results[:limit]
+
+
+BASKET_MAX_ITEMS = 25
+BASKET_PER_TERM_LIMIT = 500
+
+
+def get_basket_comparison(session, shop_labels_by_id, terms, latest=None):
+    """For a shopping list of free-text product names, find each line's
+    cheapest match in every shop's latest snapshot, then work out (a)
+    each shop's running total for however many lines it actually
+    stocks, and (b) the cheapest possible total if each line is bought
+    at whichever shop has it cheapest ("the split").
+
+    Each line runs its own bounded, LIMIT'd query (name_fold ILIKE,
+    same matching rule as /search) across every shop's latest snapshot
+    at once -- not one query per shop -- so cost scales with basket
+    size, not shop count. Callers are expected to have already capped
+    `terms` to BASKET_MAX_ITEMS; this function does not re-check that,
+    since the caller (the /basket route) is what decides how to tell
+    the user about the truncation.
+    """
+    ids = list(shop_labels_by_id)
+    if latest is None:
+        latest = get_latest_snapshots_for_all_shops(session, ids)
+    if not latest:
+        return {"lines": [], "shop_totals": [], "split": None}
+    shop_by_snapshot = {snap.id: sid for sid, snap in latest.items()}
+    snapshot_ids = list(shop_by_snapshot)
+
+    lines = []
+    for term in terms:
+        query = (
+            session.query(ItemPrice.snapshot_id, ItemPrice.name, ItemPrice.code, ItemPrice.price)
+            .filter(
+                ItemPrice.snapshot_id.in_(snapshot_ids),
+                ItemPrice.price > 0,
+                ItemPrice.name_fold.ilike(f"%{fold_name(term)}%"),
+            )
+            .order_by(ItemPrice.price.asc())
+            .limit(BASKET_PER_TERM_LIMIT)
+        )
+        # Rows arrive cheapest-first, so the first row seen for a given
+        # shop is that shop's cheapest match for this line -- later,
+        # pricier rows from the same shop are simply skipped.
+        matches = {}
+        for snapshot_id, name, code, price in query:
+            sid = shop_by_snapshot[snapshot_id]
+            if sid not in matches:
+                matches[sid] = {"name": name, "code": code, "price": price}
+        lines.append({"term": term, "matches": matches})
+
+    shop_totals = []
+    for sid, label in shop_labels_by_id.items():
+        if sid not in latest:
+            continue
+        found = [line["matches"][sid] for line in lines if sid in line["matches"]]
+        if not found:
+            continue
+        shop_totals.append(
+            {
+                "shop_id": sid,
+                "shop_label": label,
+                "found_count": len(found),
+                "missing_count": len(lines) - len(found),
+                "total": sum(m["price"] for m in found),
+            }
+        )
+    shop_totals.sort(key=lambda s: (-s["found_count"], s["total"]))
+
+    split = None
+    if lines and all(line["matches"] for line in lines):
+        split_lines = []
+        for line in lines:
+            sid, m = min(line["matches"].items(), key=lambda kv: kv[1]["price"])
+            split_lines.append(
+                {"term": line["term"], "shop_id": sid, "shop_label": shop_labels_by_id[sid], **m}
+            )
+        split_total = sum(sl["price"] for sl in split_lines)
+        shops_needed = len({sl["shop_id"] for sl in split_lines})
+        best_single = min((s["total"] for s in shop_totals if s["found_count"] == len(lines)), default=None)
+        split = {
+            "lines": split_lines,
+            "total": split_total,
+            "shops_needed": shops_needed,
+            "savings_vs_best_single_shop": (best_single - split_total) if best_single is not None else None,
+        }
+
+    return {"lines": lines, "shop_totals": shop_totals, "split": split}
