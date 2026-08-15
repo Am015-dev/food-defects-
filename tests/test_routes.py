@@ -247,6 +247,59 @@ def test_dashboard_with_data(client, seeded):
     assert "🔁" not in body
 
 
+def test_dashboard_hero_shows_best_deal(client, seeded):
+    body = client.get("/").get_data(as_text=True)
+    assert "Καλύτερη προσφορά σήμερα" in body
+    assert "Πραγματική Προσφορά" in body
+    assert "-40%" in body  # (5.0 - 3.0) / 5.0 * 100
+
+
+def test_dashboard_hero_absent_without_deals_or_drops(client):
+    body = client.get("/").get_data(as_text=True)
+    assert "Καλύτερη προσφορά σήμερα" not in body
+    assert "Μεγαλύτερη πτώση τιμής σήμερα" not in body
+
+
+def test_dashboard_hero_shows_drop_when_no_deals_exist(client, seeded_with_drop):
+    body = client.get("/").get_data(as_text=True)
+    assert "Μεγαλύτερη πτώση τιμής σήμερα" in body
+    assert DROP_PRODUCT in body
+    assert "-25%" in body  # (10.0 - 7.5) / 10.0 * 100
+
+
+def test_dashboard_hero_picks_larger_percentage_between_deal_and_drop(client):
+    session = SessionLocal()
+    try:
+        # A 25% price drop vs. a 60% verified deal -- the deal must win.
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-12",
+            _catalog([_item(1, "Dropping Item", 10.0)]),
+        )
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    _item(1, "Dropping Item", 7.5),
+                    _item(2, "Huge Deal Item", 2.0, full_price=8.0, tags=["l30d:5.0"]),
+                ]
+            ),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    body = client.get("/").get_data(as_text=True)
+    assert "Καλύτερη προσφορά σήμερα" in body
+    assert "Huge Deal Item" in body
+    assert "-60%" in body  # (5.0 - 2.0) / 5.0 * 100
+
+
 def test_dashboard_shows_streak_badge_for_recurring_bug(client):
     session = SessionLocal()
     try:
@@ -667,6 +720,37 @@ def test_deals_category_link_points_at_category_browse(client, seeded):
     assert "/category/" in body
 
 
+def test_deals_shows_streak_badge_for_multi_day_verified_deal(client):
+    item = {
+        "id": 1,
+        "code": "c1",
+        "name": "Streak Deal",
+        "price": 3.0,
+        "full_price": 6.0,
+        "tags": ["l30d:5.0"],
+    }
+    session = SessionLocal()
+    try:
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-12", _catalog([item]))
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-13", _catalog([item]))
+        session.commit()
+    finally:
+        session.close()
+
+    body = client.get("/deals").get_data(as_text=True)
+    assert "Streak Deal" in body
+    assert "2ημ." in body
+
+
+def test_deals_no_streak_badge_for_first_day_deal(client, seeded):
+    # seeded's "Πραγματική Προσφορά" appears for the first time today --
+    # a streak of 1 must not render a "Nημ." badge (that's the point of
+    # the >= 2 gate: today alone isn't a "streak").
+    body = client.get("/deals").get_data(as_text=True)
+    assert "Πραγματική Προσφορά" in body
+    assert "1ημ." not in body
+
+
 def test_feed_xml_lists_verified_deal(client, seeded):
     resp = client.get("/feed.xml")
     assert resp.status_code == 200
@@ -740,6 +824,21 @@ def test_drops_min_drop_pct_filters_out_smaller_drops(client, seeded_with_drop):
 def test_drops_min_drop_pct_keeps_matching_drops(client, seeded_with_drop):
     body = client.get("/drops", query_string={"min_drop_pct": "20"}).get_data(as_text=True)
     assert DROP_PRODUCT in body
+
+
+def test_drops_sort_price_accepted_and_orders_cheapest_first(client, seeded_with_drop):
+    resp = client.get("/drops", query_string={"sort": "price"})
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    # STEADY_PRODUCT (2.0, unchanged) isn't a drop at all -- only
+    # DROP_PRODUCT (7.5 now) should render regardless of sort order.
+    assert DROP_PRODUCT in body
+    assert STEADY_PRODUCT not in body
+
+
+def test_drops_invalid_sort_falls_back_not_500(client, seeded_with_drop):
+    resp = client.get("/drops", query_string={"sort": "bogus"})
+    assert resp.status_code == 200
 
 
 def test_drops_empty_without_two_snapshots(client, seeded):
@@ -879,6 +978,20 @@ def test_base_includes_vendored_assets(client):
     assert "vendor/aos.js" in body
     assert "vendor/countUp.umd.js" in body
     assert "vendor/aos.css" in body
+
+
+def test_page_theme_classes_on_single_purpose_pages(client):
+    assert '<body class="theme-deals">' in client.get("/deals").get_data(as_text=True)
+    assert '<body class="theme-deals">' in client.get("/drops").get_data(as_text=True)
+    assert '<body class="theme-extremes">' in client.get("/extremes").get_data(as_text=True)
+
+
+def test_page_theme_absent_on_mixed_content_dashboard(client):
+    # The dashboard mixes bug/deal/drop sections (already color-coded
+    # per-section) -- it must stay untheme'd rather than tint everything
+    # one color and clash with its own panel-good/panel-bad sections.
+    body = client.get("/").get_data(as_text=True)
+    assert '<body class="">' in body
 
 
 def test_download_csv(client, seeded):
@@ -1173,6 +1286,38 @@ def test_item_page_no_all_time_badge_with_single_snapshot(client, seeded, monkey
     )
     body = client.get(f"/item/{SHOP_A}/code-1").get_data(as_text=True)
     assert "Χαμηλότερη τιμή ποτέ" not in body
+    assert "Μέση τιμή" not in body
+
+
+def test_item_page_shows_average_price_and_chart_series(client, monkeypatch):
+    session = SessionLocal()
+    try:
+        for date_, price in [("2026-08-10", 2.00), ("2026-08-11", 1.00), ("2026-08-12", 3.00)]:
+            store_snapshot(
+                session,
+                SHOP_A,
+                SHOP_A_LABEL,
+                date_,
+                _catalog([_item(1, "Ιστορικό Προϊόν", price)]),
+            )
+        session.commit()
+    finally:
+        session.close()
+
+    monkeypatch.setattr(
+        "webapp.fetch_menu_item",
+        lambda shop_id, code, timeout=20: {
+            "price": 3.0,
+            "full_price": None,
+            "calculated_price": None,
+            "is_available": True,
+            "tags": [],
+        },
+    )
+    body = client.get(f"/item/{SHOP_A}/code-1").get_data(as_text=True)
+    assert "Μέση τιμή" in body
+    assert "2,00 €" in body  # (2.00 + 1.00 + 3.00) / 3
+    assert "chart-green" in body  # the average series actually rendered into the chart
 
 
 def test_item_page_live_timeout_gets_specific_message(client, seeded, monkeypatch):

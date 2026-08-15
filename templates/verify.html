@@ -77,9 +77,10 @@
   {% if price_chart %}
   <div class="section">
     <h3>Ιστορικό τιμής</h3>
-    {% if all_time_low or all_time_high %}
+    {% if all_time_low or all_time_high or average_price %}
     <p class="meta">
       {% if all_time_low %}Χαμηλότερη τιμή ποτέ: <span class="price-now">{{ all_time_low|eur }}</span>{% endif %}
+      {% if average_price %} · Μέση τιμή: <span class="num">{{ average_price|eur }}</span>{% endif %}
       {% if all_time_high %} · Υψηλότερη τιμή ποτέ: <span class="num">{{ all_time_high|eur }}</span>{% endif %}
     </p>
     {% endif %}

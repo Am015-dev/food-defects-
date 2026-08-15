@@ -10,6 +10,7 @@ import math
 import os
 import secrets
 import threading
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from email.utils import format_datetime
@@ -45,6 +46,7 @@ from queries import (
     get_bug_streaks,
     get_categories,
     get_category_page,
+    get_deal_streaks,
     get_category_trend,
     get_deals_page,
     get_flagged_items_filtered,
@@ -522,6 +524,28 @@ def dashboard():
     finally:
         session.close()
 
+    # One headline instead of leading with a flat stat row: whichever of
+    # "best deal right now" / "biggest price drop right now" has the
+    # larger percentage, reusing bargains[0]/price_drops[0] -- both
+    # already sorted best-first by the queries above -- so this costs no
+    # extra query.
+    hero = None
+    hero_candidates = []
+    if bargains:
+        b = dict(bargains[0])
+        b["hero_kind"] = "deal"
+        b["hero_pct"] = b["pct"]
+        b["savings"] = (b.get("full_price") or b["price"]) - b["price"]
+        hero_candidates.append(b)
+    if price_drops:
+        d = dict(price_drops[0])
+        d["hero_kind"] = "drop"
+        d["hero_pct"] = d["drop_pct"]
+        d["savings"] = (d.get("prev_price") or d["price"]) - d["price"]
+        hero_candidates.append(d)
+    if hero_candidates:
+        hero = max(hero_candidates, key=lambda r: r["hero_pct"] or 0)
+
     last_updated = max((r["snapshot_date"] for r in ok_results if r.get("snapshot_date")), default=None)
 
     # Shops that have never had a snapshot at all get their own "no
@@ -563,6 +587,7 @@ def dashboard():
     return render_template(
         "dashboard.html",
         shop_rows=shop_rows,
+        hero=hero,
         bugs=bugs,
         bargains=bargains,
         total_deals=total_deals,
@@ -621,6 +646,19 @@ def deals():
             per_page=per_page,
             latest=latest,
         )
+        # One streak query per shop represented on this page, not per
+        # row -- get_deals_page can return rows from every tracked shop
+        # at once, so batch by shop the same way view_from_snapshot does
+        # for bug streaks.
+        codes_by_shop = defaultdict(list)
+        for r in rows:
+            if r.get("code"):
+                codes_by_shop[r["shop_id"]].append(r["code"])
+        deal_streaks = {}
+        for sid, codes in codes_by_shop.items():
+            deal_streaks.update(get_deal_streaks(session, sid, codes))
+        for r in rows:
+            r["streak"] = deal_streaks.get(r["code"], 1) if r.get("code") else 1
     finally:
         session.close()
 
@@ -947,6 +985,9 @@ def drops():
     category = _parse_category()
     q = _parse_q()
     min_drop_pct = request.args.get("min_drop_pct", type=float)
+    sort = request.args.get("sort") or "drop_pct"
+    if sort not in ("drop_pct", "price", "name"):
+        sort = "drop_pct"
     page = max(1, request.args.get("page", default=1, type=int))
     per_page = 50
 
@@ -961,6 +1002,7 @@ def drops():
             q=q,
             category=category,
             min_drop_pct=min_drop_pct,
+            sort=sort,
             page=page,
             per_page=per_page,
             latest=latest,
@@ -982,6 +1024,7 @@ def drops():
         category=category,
         q=q,
         min_drop_pct=min_drop_pct,
+        sort=sort,
     )
 
 
@@ -1375,6 +1418,10 @@ def verify_item(shop_id, code):
         real_prices = [p for _, p, _ in history_rows if p and p > 0]
         all_time_low = min(real_prices) if len(real_prices) >= 2 else None
         all_time_high = max(real_prices) if len(real_prices) >= 2 else None
+        # Same >= 2 threshold as all_time_low/high: an "average" of one
+        # data point is just that point, redundant with the price already
+        # shown in the comparison table above.
+        average_price = sum(real_prices) / len(real_prices) if len(real_prices) >= 2 else None
 
         # Get this product's price across all shops for comparison --
         # matched by product identity (product_matching.py), not just an
@@ -1395,21 +1442,37 @@ def verify_item(shop_id, code):
 
     price_chart = ""
     if len(history_rows) >= 2:
+        chart_series = [
+            {
+                "label": "Τιμή",
+                "color": "var(--chart-blue)",
+                "dash": "",
+                "points": [(format_gr_date(d), p) for d, p, _ in history_rows],
+            },
+            {
+                "label": "Αρχική",
+                "color": "var(--chart-orange)",
+                "dash": "6 3",
+                "points": [(format_gr_date(d), fp) for d, _, fp in history_rows],
+            },
+        ]
+        if average_price is not None:
+            # A flat reference line at the overall average -- one point
+            # per history row (same x-positions as the other series),
+            # constant value -- so "is today's price actually good"
+            # reads straight off the chart, camelcamelcamel-style,
+            # without needing to eyeball a jagged line against a mental
+            # average.
+            chart_series.append(
+                {
+                    "label": "Μέση τιμή",
+                    "color": "var(--chart-green)",
+                    "dash": "2 3",
+                    "points": [(format_gr_date(d), average_price) for d, _, _ in history_rows],
+                }
+            )
         price_chart = line_chart(
-            [
-                {
-                    "label": "Τιμή",
-                    "color": "var(--chart-blue)",
-                    "dash": "",
-                    "points": [(format_gr_date(d), p) for d, p, _ in history_rows],
-                },
-                {
-                    "label": "Αρχική",
-                    "color": "var(--chart-orange)",
-                    "dash": "6 3",
-                    "points": [(format_gr_date(d), fp) for d, _, fp in history_rows],
-                },
-            ],
+            chart_series,
             height=150,
             y_zero=False,
             value_suffix="€",
@@ -1460,6 +1523,7 @@ def verify_item(shop_id, code):
         api_url=menu_item_url(shop_id, code),
         all_time_low=all_time_low,
         all_time_high=all_time_high,
+        average_price=average_price,
         placeholder_threshold=PLACEHOLDER_THRESHOLD_EUR,
         min_deal_pct=MIN_VERIFIED_DEAL_PCT,
         live=live,

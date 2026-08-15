@@ -71,7 +71,7 @@ document.addEventListener("DOMContentLoaded", function () {
   //    load failure both keep the real value; separator "" keeps the
   //    final frame byte-identical to the server-rendered text.
   if (!reduceMotion && window.countUp) {
-    document.querySelectorAll(".stat b").forEach(function (el) {
+    document.querySelectorAll(".stat b, .stat-inline b").forEach(function (el) {
       var end = parseInt(el.textContent.replace(/\D/g, ""), 10);
       if (isNaN(end)) return;
       var counter = new countUp.CountUp(el, end, { startVal: 0, duration: 0.8, separator: "" });

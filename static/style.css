@@ -18,6 +18,7 @@
   --good-bg: #12261a;
   --great: #ffd166;
   --great-bg: #2a2210;
+  --purple: #c084fc;
   /* Chart steps of the badge hues, validated on --panel (see charts.py). */
   --chart-red: #e66767;
   --chart-green: #199e70;
@@ -28,6 +29,14 @@
   --radius-sm: 8px;
   --content-width: 1100px;
 }
+
+/* Per-page accent theme (see base.html's <body class>): swapping this
+   one variable re-colors links, focus rings, the default button, chip
+   hovers, .panel-info's border, and .stat's default border/number --
+   everywhere else keeps its own fixed semantic color (badges, .btn.good/
+   .btn.warn, chart lines) since those mean the same thing on every page. */
+body.theme-deals { --accent: var(--good); }
+body.theme-extremes { --accent: var(--purple); }
 
 * { box-sizing: border-box; }
 
@@ -191,6 +200,15 @@ details.section ul.items li { font-size: 13.5px; }
   color: var(--accent);
 }
 .stat span { color: var(--muted); font-size: 12px; }
+/* Small non-boxed variant for a result count inline in a sentence
+   (e.g. "N προσφορές") -- same countUp.js hook as .stat b (app.js
+   selects ".stat b" broadly), just without the full stat-card chrome. */
+.stat-inline b {
+  font-size: 17px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
 .stat.stat-neutral { border-top-color: var(--border-strong); }
 .stat.stat-neutral b { color: var(--text); }
 .stat.stat-bad { border-top-color: var(--bad); }
@@ -298,7 +316,7 @@ textarea { width: 100%; max-width: 480px; resize: vertical; }
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: linear-gradient(135deg, var(--accent), #4f9fe0);
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 65%, #0b1220));
   color: #071019;
   border: 1px solid transparent;
   padding: 11px 18px;
@@ -306,7 +324,7 @@ textarea { width: 100%; max-width: 480px; resize: vertical; }
   font-weight: 700;
   font-size: 14px;
   min-height: 0;
-  box-shadow: 0 2px 12px -2px rgba(125, 211, 252, 0.4);
+  box-shadow: 0 2px 12px -2px color-mix(in srgb, var(--accent) 55%, transparent);
 }
 .btn:hover { filter: brightness(1.08); text-decoration: none; }
 .btn:active { filter: brightness(0.96); }
@@ -407,6 +425,104 @@ ul.items li .li-body { min-width: 0; }
 .thumb-36 { --thumb-size: 36px; }
 .thumb-40 { --thumb-size: 40px; }
 .thumb-80 { --thumb-size: 80px; }
+.thumb-96 { --thumb-size: 96px; }
+.thumb-160 { --thumb-size: 160px; }
+
+/* ---------- Dashboard hero ---------- */
+
+.hero {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.hero-thumb .thumb { margin: 0; }
+.hero-body { min-width: 0; }
+.hero-eyebrow {
+  display: block;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.hero-name { margin: 0 0 8px; font-size: clamp(18px, 3vw, 24px); line-height: 1.25; }
+.hero-name a { color: var(--text); }
+.hero-name a:hover { color: var(--good); text-decoration: none; }
+.hero-stats { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; row-gap: 4px; }
+.hero-pct { font-size: clamp(32px, 6vw, 48px); font-weight: 800; line-height: 1; color: var(--good); }
+.hero-price { font-size: 20px; font-weight: 700; }
+.hero-savings { color: var(--muted); font-size: 13px; }
+
+/* ---------- Ranked mini-list (dashboard's top-5 price drops) ---------- */
+
+.rank-list { list-style: none; margin: 0; padding: 0; }
+.rank-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.rank-card:first-child { border-top: none; }
+.rank-badge {
+  flex: none;
+  min-width: 26px;
+  text-align: center;
+  font-size: 20px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+.rank-body { flex: 1; min-width: 0; }
+.rank-price { flex: none; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+
+/* ---------- Product cards ----------
+   Browsing pages (deals/drops/search/category) show one product per
+   card with a real photo, instead of the dense audit-table look --
+   tables stay where the job is comparing many fields across many rows
+   (compare, basket, extremes, dashboard's bug/leaderboard panels). */
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.product-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  transition: border-color 0.15s ease, box-shadow 0.2s ease;
+}
+.product-card:hover { border-color: var(--border-strong); box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3); }
+/* Override the otherwise-fixed-pixel .thumb box so the photo fills the
+   fluid card width instead of sitting at a fixed 160px inside it. */
+.product-card .thumb { width: 100%; height: auto; aspect-ratio: 1 / 1; margin: 0; }
+.product-card .thumb img { width: 100%; height: 100%; }
+.product-card-name {
+  font-weight: 600;
+  font-size: 13.5px;
+  line-height: 1.3;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  overflow: hidden;
+  min-height: 2.6em;
+}
+.product-card-name:hover { text-decoration: underline; }
+.product-card-meta { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.product-card-price { margin-top: auto; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.product-card-price .price-now { font-size: 16px; }
+.product-card-price .price-was { font-size: 12px; }
 
 /* ---------- Utility ---------- */
 

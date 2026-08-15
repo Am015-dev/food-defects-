@@ -110,6 +110,7 @@ def get_price_drops(
     q=None,
     category=None,
     min_drop_pct=None,
+    sort="drop_pct",
     page=1,
     per_page=50,
     latest=None,
@@ -156,7 +157,12 @@ def get_price_drops(
     )
     total = combined.count()
 
-    combined = combined.order_by(literal_column("drop_pct").desc())
+    if sort == "price":
+        combined = combined.order_by(literal_column("price").asc())
+    elif sort == "name":
+        combined = combined.order_by(literal_column("name").asc())
+    else:
+        combined = combined.order_by(literal_column("drop_pct").desc())
     last_page = max(1, math.ceil(total / per_page))
     page = min(max(1, page), last_page)
     rows = combined.offset((page - 1) * per_page).limit(per_page).all()
@@ -294,20 +300,22 @@ def get_flagged_items_filtered(session, snapshot_id, q=None, bug_type=None):
     return query.all()
 
 
-def get_bug_streaks(session, shop_id, codes, bug_type, max_days=30):
+def _flag_streaks(session, shop_id, codes, flag_column, max_days):
     """For each code in `codes` (today's flagged items for one shop), how
-    many consecutive most-recent daily snapshots also had it flagged as
-    bug_type ('zero' or 'placeholder') -- so a chronic offender (the
-    same SKU broken for weeks) can be told apart from a one-off glitch,
-    which look identical in a plain "flagged today" list.
+    many consecutive most-recent daily snapshots also had flag_column
+    set -- so a chronic offender (the same SKU broken, or the same deal
+    running, for weeks) can be told apart from a one-off, which look
+    identical in a plain "flagged today" list. Shared by get_bug_streaks
+    (is_zero_price_bug / is_placeholder_bug) and get_deal_streaks
+    (is_verified_deal) -- same lookback shape, different flag.
 
     One query for the WHOLE shop, not one per item -- looping a
     per-item lookback query here would repeat the exact N+1 shape
     already fixed for get_product_across_shops (see MISTAKES.md-style
     lesson: batch by shop, not by row). max_days bounds the lookback so
-    a years-old chronic bug doesn't walk the shop's whole history; the
-    badge only needs to distinguish "today only" from "ongoing", not an
-    exact lifetime count.
+    a years-old chronic streak doesn't walk the shop's whole history;
+    the badge only needs to distinguish "today only" from "ongoing",
+    not an exact lifetime count.
 
     Returns {code: streak_days}, streak_days >= 1 for every code passed
     in (today itself always counts, since these are today's flagged
@@ -315,7 +323,6 @@ def get_bug_streaks(session, shop_id, codes, bug_type, max_days=30):
     """
     if not codes:
         return {}
-    flag_column = ItemPrice.is_zero_price_bug if bug_type == "zero" else ItemPrice.is_placeholder_bug
 
     recent_snapshot_ids = [
         sid
@@ -335,20 +342,35 @@ def get_bug_streaks(session, shop_id, codes, bug_type, max_days=30):
         ItemPrice.code.in_(codes),
         flag_column.is_(True),
     )
-    bugged_by_snapshot = defaultdict(set)
+    flagged_by_snapshot = defaultdict(set)
     for snapshot_id, code in rows:
-        bugged_by_snapshot[snapshot_id].add(code)
+        flagged_by_snapshot[snapshot_id].add(code)
 
     streaks = {}
     for code in codes:
         streak = 0
         for snapshot_id in recent_snapshot_ids:
-            if code in bugged_by_snapshot[snapshot_id]:
+            if code in flagged_by_snapshot[snapshot_id]:
                 streak += 1
             else:
                 break
         streaks[code] = streak
     return streaks
+
+
+def get_bug_streaks(session, shop_id, codes, bug_type, max_days=30):
+    """Consecutive-day streak for a bug flag ('zero' or 'placeholder') --
+    see _flag_streaks for the shared mechanics."""
+    flag_column = ItemPrice.is_zero_price_bug if bug_type == "zero" else ItemPrice.is_placeholder_bug
+    return _flag_streaks(session, shop_id, codes, flag_column, max_days)
+
+
+def get_deal_streaks(session, shop_id, codes, max_days=30):
+    """Consecutive-day streak for a verified deal -- the same "chronic
+    vs. one-off" distinction get_bug_streaks gives bugs, applied to
+    deals: a discount that's been genuinely verified for N days running
+    is worth trusting more than one that just appeared today."""
+    return _flag_streaks(session, shop_id, codes, ItemPrice.is_verified_deal, max_days)
 
 
 def get_categories(session, snapshot_ids):

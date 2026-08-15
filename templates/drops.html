@@ -35,33 +35,35 @@
       {% endfor %}
     </select>
   </label>
+  <label>Ταξινόμηση
+    <select name="sort">
+      <option value="drop_pct" {% if sort == 'drop_pct' %}selected{% endif %}>Μεγαλύτερη πτώση</option>
+      <option value="price" {% if sort == 'price' %}selected{% endif %}>Φθηνότερα πρώτα</option>
+      <option value="name" {% if sort == 'name' %}selected{% endif %}>Αλφαβητικά</option>
+    </select>
+  </label>
   <button type="submit" class="js-hide">Εφαρμογή</button>
 </form>
 
 <section class="panel panel-info" data-aos="fade-up">
-  <p class="meta">{{ total }} πτώσεις τιμής{% if total %} · σελίδα {{ page }} από {{ pages }}{% endif %}</p>
+  <p class="meta"><span class="stat-inline"><b>{{ total }}</b></span> πτώσεις τιμής{% if total %} · σελίδα {{ page }} από {{ pages }}{% endif %}</p>
   <p class="meta">
     <a class="chip" href="{{ url_for('download_drops_csv', shop_id=shop_filter, q=q, category=category, min_drop_pct=min_drop_pct) }}">⬇ CSV</a>
   </p>
   {% if rows %}
-  <div class="table-scroll">
-    <table class="cards-mobile">
-      <thead>
-        <tr><th>Προϊόν</th><th>Κατάστημα</th><th>Κατηγορία</th><th data-sort>Τώρα</th><th>Πριν</th><th data-sort>Πτώση</th></tr>
-      </thead>
-      <tbody>
-        {% for d in rows %}
-        <tr>
-          <td class="td-main">{{ thumb(d.shop_id, d.code, 36, 72) }}{% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
-          <td data-label="Κατάστημα"><span class="item-cat">{{ d.shop_label }}</span></td>
-          <td data-label="Κατηγορία"><a class="item-cat" href="{{ url_for('category_browse', name=d.category.split(' || ')[0]) }}">{{ d.category }}</a></td>
-          <td data-label="Τώρα" class="price-now">{{ d.price|eur }}</td>
-          <td data-label="Πριν" class="price-was">{{ d.prev_price|eur }}</td>
-          <td data-label="Πτώση" class="pct">-{{ "%.0f"|format(d.drop_pct) }}%</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="card-grid">
+    {% for d in rows %}
+    <div class="product-card">
+      {{ thumb(d.shop_id, d.code, 160, 320) }}
+      {% if d.code %}<a class="product-card-name" href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}<span class="product-card-name">{{ d.name }}</span>{% endif %}
+      <div class="product-card-meta">{{ d.shop_label }} · <a href="{{ url_for('category_browse', name=d.category.split(' || ')[0]) }}">{{ d.category }}</a></div>
+      <div class="product-card-price">
+        <span class="price-now">{{ d.price|eur }}</span>
+        <span class="price-was">{{ d.prev_price|eur }}</span>
+        <span class="badge good">-{{ "%.0f"|format(d.drop_pct) }}%</span>
+      </div>
+    </div>
+    {% endfor %}
   </div>
   <nav class="pagination" aria-label="Σελιδοποίηση">
     {% if page > 1 %}<a href="{{ page_url(page - 1) }}">← Προηγούμενη</a>{% else %}<span class="disabled">← Προηγούμενη</span>{% endif %}

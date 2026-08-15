@@ -21,6 +21,21 @@
 </section>
 {% endif %}
 
+{% if hero %}
+<section class="hero panel panel-good" data-aos="fade-up">
+  <div class="hero-thumb">{{ thumb(hero.shop_id, hero.code, 96, 192) }}</div>
+  <div class="hero-body">
+    <span class="hero-eyebrow">{{ "Καλύτερη προσφορά σήμερα" if hero.hero_kind == "deal" else "Μεγαλύτερη πτώση τιμής σήμερα" }}</span>
+    <h2 class="hero-name">{% if hero.code %}<a href="/item/{{ hero.shop_id }}/{{ hero.code }}">{{ hero.name }}</a>{% else %}{{ hero.name }}{% endif %}</h2>
+    <div class="hero-stats">
+      <span class="hero-pct">-{{ "%.0f"|format(hero.hero_pct) }}%</span>
+      <span class="hero-price">{{ hero.price|eur }}</span>
+      <span class="hero-savings">Εξοικονόμηση {{ hero.savings|eur }} · {{ hero.shop_label }}</span>
+    </div>
+  </div>
+</section>
+{% endif %}
+
 <div class="stat-strip">
   <div class="stat stat-neutral"><b>{{ shop_rows|length }}</b><span>καταστήματα</span></div>
   <div class="stat stat-neutral"><b>{{ total_items }}</b><span>προϊόντα</span></div>
@@ -147,24 +162,23 @@
 <section class="panel panel-info" id="drops" data-aos="fade-up">
   <h2>Πρόσφατες πτώσεις τιμών</h2>
   {% if price_drops %}
-  <div class="table-scroll">
-    <table class="cards-mobile">
-      <thead>
-        <tr><th>Προϊόν</th><th>Κατάστημα</th><th data-sort>Τώρα</th><th>Πριν</th><th data-sort>Πτώση</th></tr>
-      </thead>
-      <tbody>
-        {% for d in price_drops %}
-        <tr>
-          <td class="td-main">{{ thumb(d.shop_id, d.code, 36, 72) }}{% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
-          <td data-label="Κατάστημα"><span class="item-cat">{{ d.shop_label }}</span></td>
-          <td data-label="Τώρα" class="price-now">{{ d.price|eur }}</td>
-          <td data-label="Πριν" class="price-was">{{ d.prev_price|eur }}</td>
-          <td data-label="Πτώση" class="pct">-{{ "%.0f"|format(d.drop_pct) }}%</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+  <ol class="rank-list">
+    {% for d in price_drops %}
+    <li class="rank-card">
+      <span class="rank-badge">{{ loop.index }}</span>
+      {{ thumb(d.shop_id, d.code, 48, 96) }}
+      <div class="rank-body">
+        {% if d.code %}<a href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}
+        <div class="item-cat">{{ d.shop_label }}</div>
+      </div>
+      <div class="rank-price">
+        <span class="price-now">{{ d.price|eur }}</span>
+        <span class="price-was">{{ d.prev_price|eur }}</span>
+        <span class="badge good">-{{ "%.0f"|format(d.drop_pct) }}%</span>
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
   <div class="section"><a class="btn" href="/drops">Όλες οι πτώσεις τιμών →</a></div>
   {% else %}
   <div class="empty">Καμία πτώση ακόμη.</div>

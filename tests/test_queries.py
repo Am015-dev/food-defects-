@@ -122,6 +122,80 @@ def test_get_price_drops_min_drop_pct_excludes_smaller_drops():
         session.close()
 
 
+def test_get_price_drops_sort_price_orders_cheapest_first():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-12",
+            _catalog(
+                [
+                    {"id": 1, "code": "c1", "name": "Expensive", "price": 10.0, "tags": []},
+                    {"id": 2, "code": "c2", "name": "Cheap", "price": 4.0, "tags": []},
+                ]
+            ),
+        )
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    {"id": 1, "code": "c1", "name": "Expensive", "price": 8.0, "tags": []},
+                    {"id": 2, "code": "c2", "name": "Cheap", "price": 3.0, "tags": []},
+                ]
+            ),
+        )
+        session.commit()
+
+        rows, _ = get_price_drops(session, {SHOP_A: SHOP_A_LABEL}, sort="price")
+        assert [r["name"] for r in rows] == ["Cheap", "Expensive"]
+
+        rows, _ = get_price_drops(session, {SHOP_A: SHOP_A_LABEL}, sort="drop_pct")
+        # Expensive: 10 -> 8 = 20% drop; Cheap: 4 -> 3 = 25% drop.
+        assert [r["name"] for r in rows] == ["Cheap", "Expensive"]
+    finally:
+        session.close()
+
+
+def test_get_price_drops_sort_name_orders_alphabetically():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-12",
+            _catalog(
+                [
+                    {"id": 1, "code": "c1", "name": "Zeta", "price": 10.0, "tags": []},
+                    {"id": 2, "code": "c2", "name": "Alpha", "price": 10.0, "tags": []},
+                ]
+            ),
+        )
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    {"id": 1, "code": "c1", "name": "Zeta", "price": 5.0, "tags": []},
+                    {"id": 2, "code": "c2", "name": "Alpha", "price": 5.0, "tags": []},
+                ]
+            ),
+        )
+        session.commit()
+
+        rows, _ = get_price_drops(session, {SHOP_A: SHOP_A_LABEL}, sort="name")
+        assert [r["name"] for r in rows] == ["Alpha", "Zeta"]
+    finally:
+        session.close()
+
+
 def test_get_price_drops_excludes_null_code_rows():
     session = SessionLocal()
     try:
@@ -620,6 +694,58 @@ def test_get_bug_streaks_respects_max_days_cap():
         # Only the most recent 2 snapshots count toward the streak.
         streaks = get_bug_streaks(session, SHOP_A, ["c1"], "zero", max_days=2)
         assert streaks["c1"] == 2
+    finally:
+        session.close()
+
+
+def test_get_deal_streaks_counts_consecutive_verified_days():
+    session = SessionLocal()
+    try:
+        from queries import get_deal_streaks
+
+        deal_item = {
+            "id": 1,
+            "code": "c1",
+            "name": "Ongoing Deal",
+            "price": 3.0,
+            "full_price": 6.0,
+            "tags": ["l30d:5.0"],
+        }
+        not_deal_item = {"id": 1, "code": "c1", "name": "Ongoing Deal", "price": 6.0, "tags": []}
+
+        # Verified on days 1-2, NOT verified on day 2... wait -- one day
+        # at full price (not a deal) between two verified days, so the
+        # streak must stop at the first gap looking backward from today.
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-11", _catalog([deal_item]))
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-12", _catalog([not_deal_item]))
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-13", _catalog([deal_item]))
+        session.commit()
+
+        streaks = get_deal_streaks(session, SHOP_A, ["c1"])
+        assert streaks["c1"] == 1  # only today -- yesterday broke the streak
+    finally:
+        session.close()
+
+
+def test_get_deal_streaks_counts_a_real_multi_day_run():
+    session = SessionLocal()
+    try:
+        from queries import get_deal_streaks
+
+        deal_item = {
+            "id": 1,
+            "code": "c1",
+            "name": "Real Streak",
+            "price": 3.0,
+            "full_price": 6.0,
+            "tags": ["l30d:5.0"],
+        }
+        for day in ("2026-08-11", "2026-08-12", "2026-08-13"):
+            store_snapshot(session, SHOP_A, SHOP_A_LABEL, day, _catalog([deal_item]))
+        session.commit()
+
+        streaks = get_deal_streaks(session, SHOP_A, ["c1"])
+        assert streaks["c1"] == 3
     finally:
         session.close()
 

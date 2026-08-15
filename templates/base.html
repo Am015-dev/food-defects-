@@ -15,7 +15,15 @@
    no-JS visitors without the html:not(.js) override in style.css. #}
 <script nonce="{{ csp_nonce }}">document.documentElement.classList.add("js")</script>
 </head>
-<body>
+{# The dashboard mixes bug/deal/drop/shop sections together (already
+   color-coded per-section via panel-bad/panel-good/panel-info) --
+   theming its whole body one color would clash with those. Page
+   theming is for the genuinely single-purpose pages instead. #}
+{% set theme =
+  'theme-deals' if request.path in ('/deals', '/drops') else
+  'theme-extremes' if request.path == '/extremes' else
+  '' %}
+<body class="{{ theme }}">
 <header class="topbar">
   <div class="topbar-inner">
     <a class="brand" href="/">🛒 Παρατηρητήριο Τιμών</a>
