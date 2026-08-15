@@ -152,6 +152,15 @@ def _set_security_headers(response):
         "frame-ancestors 'none'; "
         "form-action 'self'"
     )
+    # Every page here shows data that can change on the next ingest run
+    # (or within the hour, for the manual /refresh path) -- with no
+    # explicit Cache-Control at all, a browser or intermediate proxy is
+    # free to fall back to heuristic caching and serve a stale page
+    # indefinitely. Static assets (style.css etc.) already set their own
+    # sensible "no-cache" (revalidate) via Flask's static handler; this
+    # only touches the HTML responses those assets are embedded in.
+    if response.mimetype == "text/html":
+        response.headers["Cache-Control"] = "no-store"
     return response
 
 

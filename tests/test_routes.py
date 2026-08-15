@@ -179,6 +179,24 @@ def test_security_headers_present(client):
     assert "frame-ancestors 'none'" in csp
 
 
+def test_html_pages_are_not_cacheable(client, seeded):
+    # Regression: every page here shows data that changes daily (or
+    # within the hour via manual /refresh) -- without an explicit
+    # Cache-Control, a browser or intermediate proxy could serve a
+    # stale page indefinitely (reported live: "I still see the old
+    # site" after a deploy the server had already picked up).
+    for path in ("/", "/deals", "/drops", "/search", "/extremes", "/compare", "/basket"):
+        resp = client.get(path)
+        assert resp.headers.get("Cache-Control") == "no-store", path
+
+
+def test_static_assets_keep_their_own_cache_control(client):
+    # The blanket no-store above must not clobber static assets' own
+    # (correct) revalidate-based caching -- CSS/JS aren't HTML.
+    resp = client.get("/static/style.css")
+    assert resp.headers.get("Cache-Control") != "no-store"
+
+
 def test_csp_script_src_has_no_unsafe_inline(client):
     # The CSP must rely on the per-request nonce, not a blanket
     # 'unsafe-inline', or it stops meaningfully restricting inline
