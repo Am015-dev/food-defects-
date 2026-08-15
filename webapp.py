@@ -33,6 +33,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from charts import line_chart
 from db import ItemPrice, SessionLocal, Snapshot, init_db
 from efood_client import fetch_menu_item, menu_item_url
+from price_analysis import MIN_VERIFIED_DEAL_PCT, PLACEHOLDER_THRESHOLD_EUR
 from price_utils import get_price_comparison_info
 from queries import (
     compare_across_shops,
@@ -1106,6 +1107,8 @@ def verify_item(shop_id, code):
         api_url=menu_item_url(shop_id, code),
         all_time_low=all_time_low,
         all_time_high=all_time_high,
+        placeholder_threshold=PLACEHOLDER_THRESHOLD_EUR,
+        min_deal_pct=MIN_VERIFIED_DEAL_PCT,
         live=live,
         live_l30d=live_l30d,
         live_error=live_error,

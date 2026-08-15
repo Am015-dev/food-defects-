@@ -126,6 +126,16 @@ main {
 .panel > .meta { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
 
 .section { margin-top: 14px; }
+details.section summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 13.5px;
+  font-weight: 600;
+  list-style: none; /* the summary text itself already ends in "→" */
+}
+details.section summary::-webkit-details-marker { display: none; }
+details.section[open] summary { margin-bottom: 10px; }
+details.section ul.items li { font-size: 13.5px; }
 .section h3 {
   font-size: 12.5px;
   text-transform: uppercase;

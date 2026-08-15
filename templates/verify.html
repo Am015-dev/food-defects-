@@ -47,6 +47,24 @@
     </table>
   </div>
 
+  {% if stored and (stored.is_zero_price_bug or stored.is_placeholder_bug or stored.is_verified_deal) %}
+  <details class="section">
+    <summary>Γιατί επισημάνθηκε; →</summary>
+    <ul class="items">
+      {% if stored.is_zero_price_bug %}
+      <li><span class="badge bad">0,00 €</span> Κανόνας: τιμή ≤ 0,00 €. Καταγεγραμμένη τιμή: {{ stored.price|eur }}.</li>
+      {% endif %}
+      {% if stored.is_placeholder_bug %}
+      <li><span class="badge warn">Κατώτατη 30ημ.</span> Κανόνας: κατώτατη 30 ημερών ≤ {{ placeholder_threshold|eur }}. Καταγεγραμμένη κατώτατη 30ημ.: {{ stored.l30d_price|eur }}.</li>
+      {% endif %}
+      {% if stored.is_verified_deal %}
+      <li><span class="badge good">Προσφορά</span> Κανόνας: τιμή τουλάχιστον {{ "%.0f"|format(min_deal_pct) }}% κάτω από την κατώτατη 30 ημερών, με γνωστή αρχική τιμή, εξαιρουμένων προϊόντων ανά βάρος.
+        Τιμή {{ stored.price|eur }} έναντι κατώτατης {{ stored.l30d_price|eur }} = {{ "%.1f"|format(stored.deal_pct) }}% έκπτωση.</li>
+      {% endif %}
+    </ul>
+  </details>
+  {% endif %}
+
   <div class="section">
     {% if verdict_ok %}
     <h3><span class="badge good">Επιβεβαιώθηκε</span> {{ verdict }}</h3>

@@ -848,6 +848,46 @@ def test_item_page_shows_great_deal_badge(client, seeded, monkeypatch):
     assert "ΣΠΟΥΔΑΙΑ ΠΡΟΣΦΟΡΑ" in body
 
 
+def _stub_live(monkeypatch, price=1.0):
+    monkeypatch.setattr(
+        "webapp.fetch_menu_item",
+        lambda shop_id, code, timeout=20: {
+            "price": price,
+            "full_price": None,
+            "calculated_price": None,
+            "is_available": True,
+            "tags": [],
+        },
+    )
+
+
+def test_item_page_explains_zero_price_bug(client, seeded, monkeypatch):
+    _stub_live(monkeypatch, price=0.0)
+    body = client.get(f"/item/{SHOP_A}/code-2").get_data(as_text=True)  # Μηδενική Τιμή
+    assert "Γιατί επισημάνθηκε" in body
+    assert "τιμή ≤ 0,00 €" in body
+
+
+def test_item_page_explains_placeholder_bug(client, seeded, monkeypatch):
+    _stub_live(monkeypatch, price=2.0)
+    body = client.get(f"/item/{SHOP_A}/code-3").get_data(as_text=True)  # Πλασματική Τιμή
+    assert "κατώτατη 30 ημερών ≤ 0,05 €" in body
+    assert "0,01 €" in body  # the seeded l30d value
+
+
+def test_item_page_explains_verified_deal(client, seeded, monkeypatch):
+    _stub_live(monkeypatch, price=3.0)
+    body = client.get(f"/item/{SHOP_A}/code-4").get_data(as_text=True)  # Πραγματική Προσφορά
+    assert "τουλάχιστον 20% κάτω" in body
+    assert "40.0% έκπτωση" in body  # (5.0 - 3.0) / 5.0 * 100
+
+
+def test_item_page_no_disclosure_for_unflagged_item(client, seeded, monkeypatch):
+    _stub_live(monkeypatch, price=1.68)
+    body = client.get(f"/item/{SHOP_A}/code-1").get_data(as_text=True)  # Κοινό Προϊόν Δοκιμής
+    assert "Γιατί επισημάνθηκε" not in body
+
+
 def test_item_page_shows_all_time_low_high_from_history(client, monkeypatch):
     session = SessionLocal()
     try:

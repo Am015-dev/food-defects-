@@ -31,16 +31,25 @@ def l30d_price(item):
     return None
 
 
+# Named so webapp.py's /item page can explain, in the exact terms the
+# rule below actually uses, why a listing was flagged -- rather than
+# either hardcoding a second copy of these numbers in a template (which
+# could silently drift from the real rule) or leaving the reader to
+# guess what "implausible" and "verified" mean here.
+PLACEHOLDER_THRESHOLD_EUR = 0.05
+MIN_VERIFIED_DEAL_PCT = 20.0
+
+
 def find_zero_price_bugs(items):
     return [it for it in items if it.get("price", 0) <= 0]
 
 
-def find_placeholder_reference_price_bugs(items, threshold=0.05):
+def find_placeholder_reference_price_bugs(items, threshold=PLACEHOLDER_THRESHOLD_EUR):
     """Items whose 30-day-low tag is an implausible near-zero placeholder."""
     return [it for it in items if (l30d := l30d_price(it)) is not None and l30d <= threshold]
 
 
-def find_verified_deep_discounts(items, min_pct=20.0):
+def find_verified_deep_discounts(items, min_pct=MIN_VERIFIED_DEAL_PCT):
     """Fixed-size items genuinely priced below their real 30-day low, with
     a displayed discount badge. Excludes sold-by-weight items, where the
     30-day-low may have been recorded at a different purchase weight and
