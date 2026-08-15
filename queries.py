@@ -294,6 +294,63 @@ def get_flagged_items_filtered(session, snapshot_id, q=None, bug_type=None):
     return query.all()
 
 
+def get_bug_streaks(session, shop_id, codes, bug_type, max_days=30):
+    """For each code in `codes` (today's flagged items for one shop), how
+    many consecutive most-recent daily snapshots also had it flagged as
+    bug_type ('zero' or 'placeholder') -- so a chronic offender (the
+    same SKU broken for weeks) can be told apart from a one-off glitch,
+    which look identical in a plain "flagged today" list.
+
+    One query for the WHOLE shop, not one per item -- looping a
+    per-item lookback query here would repeat the exact N+1 shape
+    already fixed for get_product_across_shops (see MISTAKES.md-style
+    lesson: batch by shop, not by row). max_days bounds the lookback so
+    a years-old chronic bug doesn't walk the shop's whole history; the
+    badge only needs to distinguish "today only" from "ongoing", not an
+    exact lifetime count.
+
+    Returns {code: streak_days}, streak_days >= 1 for every code passed
+    in (today itself always counts, since these are today's flagged
+    codes by construction).
+    """
+    if not codes:
+        return {}
+    flag_column = ItemPrice.is_zero_price_bug if bug_type == "zero" else ItemPrice.is_placeholder_bug
+
+    recent_snapshot_ids = [
+        sid
+        for (sid,) in (
+            session.query(Snapshot.id)
+            .filter(Snapshot.shop_id == shop_id)
+            .order_by(Snapshot.snapshot_date.desc())
+            .limit(max_days)
+            .all()
+        )
+    ]
+    if not recent_snapshot_ids:
+        return {}
+
+    rows = session.query(ItemPrice.snapshot_id, ItemPrice.code).filter(
+        ItemPrice.snapshot_id.in_(recent_snapshot_ids),
+        ItemPrice.code.in_(codes),
+        flag_column.is_(True),
+    )
+    bugged_by_snapshot = defaultdict(set)
+    for snapshot_id, code in rows:
+        bugged_by_snapshot[snapshot_id].add(code)
+
+    streaks = {}
+    for code in codes:
+        streak = 0
+        for snapshot_id in recent_snapshot_ids:
+            if code in bugged_by_snapshot[snapshot_id]:
+                streak += 1
+            else:
+                break
+        streaks[code] = streak
+    return streaks
+
+
 def get_categories(session, snapshot_ids):
     """Sorted distinct top-level category groups across the given
     snapshots, for filter dropdowns. Categories are stored as

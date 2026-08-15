@@ -37,6 +37,7 @@ from price_utils import get_price_comparison_info
 from queries import (
     compare_across_shops,
     deal_tier,
+    get_bug_streaks,
     get_categories,
     get_deals_page,
     get_flagged_items_filtered,
@@ -280,6 +281,19 @@ def view_from_snapshot(session, shop_id, label, snapshot, q=None, bug_type=None)
     # and loading all of that as ORM objects just to filter down to a
     # handful in Python is what once pushed memory over Render's 512MB cap.
     items = get_flagged_items_filtered(session, snapshot.id, q=q, bug_type=bug_type)
+
+    zero_price_bugs = [it for it in items if it.is_zero_price_bug]
+    placeholder_bugs = [it for it in items if it.is_placeholder_bug]
+    # One extra query per bug type, per shop -- not per item (see
+    # get_bug_streaks) -- so a chronic offender (same SKU broken for
+    # weeks) shows differently from a one-off glitch.
+    zero_streaks = get_bug_streaks(
+        session, shop_id, [it.code for it in zero_price_bugs if it.code], "zero"
+    )
+    placeholder_streaks = get_bug_streaks(
+        session, shop_id, [it.code for it in placeholder_bugs if it.code], "placeholder"
+    )
+
     return {
         "ok": True,
         "id": shop_id,
@@ -291,9 +305,14 @@ def view_from_snapshot(session, shop_id, label, snapshot, q=None, bug_type=None)
         "total_items": snapshot.total_items,
         "total_categories": snapshot.total_categories,
         "zero_price_bugs": [
-            {"name": it.name, "category": it.category, "code": it.code, "shop_id": shop_id}
-            for it in items
-            if it.is_zero_price_bug
+            {
+                "name": it.name,
+                "category": it.category,
+                "code": it.code,
+                "shop_id": shop_id,
+                "streak": zero_streaks.get(it.code, 1),
+            }
+            for it in zero_price_bugs
         ],
         "placeholder_bugs": [
             {
@@ -302,9 +321,9 @@ def view_from_snapshot(session, shop_id, label, snapshot, q=None, bug_type=None)
                 "price": it.price,
                 "code": it.code,
                 "shop_id": shop_id,
+                "streak": placeholder_streaks.get(it.code, 1),
             }
-            for it in items
-            if it.is_placeholder_bug
+            for it in placeholder_bugs
         ],
         "verified_deals": sorted(
             (

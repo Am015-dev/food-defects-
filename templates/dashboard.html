@@ -79,6 +79,7 @@
       {% for it in bugs.zero_price %}
       <li>{{ thumb(it.shop_id, it.code, 32, 64) }}<div class="li-body">
         {% if it.code %}<a href="/item/{{ it.shop_id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
+        {% if it.streak >= 2 %}<span class="badge bad" title="Ίδιο σφάλμα {{ it.streak }} ημέρες στη σειρά">🔁 {{ it.streak }}ημ.</span>{% endif %}
         <span class="item-cat">· {{ it.shop_label }} · {{ it.category }}</span>
       </div></li>
       {% endfor %}
@@ -97,6 +98,7 @@
       {% for it in bugs.placeholder[:20] %}
       <li>{{ thumb(it.shop_id, it.code, 32, 64) }}<div class="li-body">
         {% if it.code %}<a href="/item/{{ it.shop_id }}/{{ it.code }}">{{ it.name }}</a>{% else %}{{ it.name }}{% endif %}
+        {% if it.streak >= 2 %}<span class="badge warn" title="Ίδιο σφάλμα {{ it.streak }} ημέρες στη σειρά">🔁 {{ it.streak }}ημ.</span>{% endif %}
         <span class="item-cat">· {{ it.shop_label }} · {{ it.category }} · τώρα {{ it.price|eur }}</span>
       </div></li>
       {% endfor %}

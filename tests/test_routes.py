@@ -242,6 +242,27 @@ def test_dashboard_with_data(client, seeded):
     assert "Μηδενική Τιμή" in body
     assert "Πλασματική Τιμή" in body
     assert "Πραγματική Προσφορά" in body
+    # A bug seen for the first time today must not show a streak badge.
+    assert "🔁" not in body
+
+
+def test_dashboard_shows_streak_badge_for_recurring_bug(client):
+    session = SessionLocal()
+    try:
+        for day in ("2026-08-11", "2026-08-12", "2026-08-13"):
+            store_snapshot(
+                session,
+                SHOP_A,
+                SHOP_A_LABEL,
+                day,
+                _catalog([_item(1, "Χρόνιο Σφάλμα", 0.0)]),
+            )
+        session.commit()
+    finally:
+        session.close()
+
+    body = client.get("/").get_data(as_text=True)
+    assert "🔁 3ημ." in body
 
 
 def test_dashboard_search_is_accent_insensitive(client, seeded):

@@ -523,3 +523,95 @@ def test_get_low_confidence_matches_empty_when_none_below_threshold():
         assert get_low_confidence_matches(session, max_confidence=0.93) == []
     finally:
         session.close()
+
+
+# ---------- get_bug_streaks ----------
+
+
+def test_get_bug_streaks_counts_consecutive_days():
+    session = SessionLocal()
+    try:
+        from queries import get_bug_streaks
+
+        # code "c1" is a zero-price bug on days 1-3 (consecutive,
+        # streak 3); code "c2" only on day 3 (streak 1); code "c3" was
+        # a bug on day 1 but recovered by day 2, then broke again on
+        # day 3 -- the streak must stop at the first gap, not count
+        # every day it was ever broken.
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-11",
+            _catalog(
+                [
+                    {"id": 1, "code": "c1", "name": "Bug One", "price": 0.0, "tags": []},
+                    {"id": 3, "code": "c3", "name": "Bug Three", "price": 0.0, "tags": []},
+                ]
+            ),
+        )
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-12",
+            _catalog(
+                [
+                    {"id": 1, "code": "c1", "name": "Bug One", "price": 0.0, "tags": []},
+                    {"id": 3, "code": "c3", "name": "Bug Three", "price": 1.5, "tags": []},  # recovered
+                ]
+            ),
+        )
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    {"id": 1, "code": "c1", "name": "Bug One", "price": 0.0, "tags": []},
+                    {"id": 2, "code": "c2", "name": "Bug Two", "price": 0.0, "tags": []},
+                    {"id": 3, "code": "c3", "name": "Bug Three", "price": 0.0, "tags": []},  # broke again
+                ]
+            ),
+        )
+        session.commit()
+
+        streaks = get_bug_streaks(session, SHOP_A, ["c1", "c2", "c3"], "zero")
+        assert streaks["c1"] == 3
+        assert streaks["c2"] == 1
+        assert streaks["c3"] == 1
+    finally:
+        session.close()
+
+
+def test_get_bug_streaks_empty_codes_returns_empty():
+    session = SessionLocal()
+    try:
+        from queries import get_bug_streaks
+
+        assert get_bug_streaks(session, SHOP_A, [], "zero") == {}
+    finally:
+        session.close()
+
+
+def test_get_bug_streaks_respects_max_days_cap():
+    session = SessionLocal()
+    try:
+        from queries import get_bug_streaks
+
+        for day in ("2026-08-11", "2026-08-12", "2026-08-13"):
+            store_snapshot(
+                session,
+                SHOP_A,
+                SHOP_A_LABEL,
+                day,
+                _catalog([{"id": 1, "code": "c1", "name": "Bug One", "price": 0.0, "tags": []}]),
+            )
+        session.commit()
+
+        # Only the most recent 2 snapshots count toward the streak.
+        streaks = get_bug_streaks(session, SHOP_A, ["c1"], "zero", max_days=2)
+        assert streaks["c1"] == 2
+    finally:
+        session.close()
