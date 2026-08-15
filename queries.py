@@ -859,3 +859,75 @@ def iter_all_sales(session, shop_labels_by_id, shop_id=None, q=None, category=No
             )
         rows.sort(key=lambda r: r["pct_off_full"], reverse=True)
         yield from rows
+
+
+def iter_all_bugs(session, shop_labels_by_id, shop_id=None, q=None, category=None):
+    """Yield every currently-flagged price bug (zero-price or an
+    implausible placeholder 30-day-low), across all shops or one
+    specific shop -- same streaming, column-only, per-shop-latest-
+    snapshot shape as iter_all_sales, for a bugs-only CSV export.
+    Naturally bounded: bug rows are a small fraction of any snapshot.
+    """
+    ids = [shop_id] if shop_id is not None else list(shop_labels_by_id)
+    latest = get_latest_snapshots_for_all_shops(session, ids)
+    for sid, snap in latest.items():
+        label = shop_labels_by_id[sid]
+        query = session.query(
+            ItemPrice.name,
+            ItemPrice.category,
+            ItemPrice.price,
+            ItemPrice.l30d_price,
+            ItemPrice.is_zero_price_bug,
+            ItemPrice.is_placeholder_bug,
+            ItemPrice.code,
+        ).filter(
+            ItemPrice.snapshot_id == snap.id,
+            or_(ItemPrice.is_zero_price_bug.is_(True), ItemPrice.is_placeholder_bug.is_(True)),
+        )
+        query = _apply_text_filters(query, q=q, category=category)
+        for name, cat, price, l30d, is_zero, is_placeholder, code in query:
+            yield {
+                "shop_id": sid,
+                "shop_label": label,
+                "name": name,
+                "category": cat,
+                "code": code,
+                "price": price,
+                "l30d_price": l30d,
+                "bug_type": "zero_price" if is_zero else "placeholder_reference",
+                "snapshot_date": snap.snapshot_date,
+            }
+
+
+def iter_all_drops(session, shop_labels_by_id, shop_id=None, q=None, category=None, min_drop_pct=None):
+    """Yield every price drop between a shop's previous snapshot and its
+    latest one, across all shops or one specific shop -- for a CSV
+    export of the /drops view. Reuses _shop_price_drops_query (the same
+    self-join /drops itself queries) per shop instead of UNION ALL-ing
+    them the way get_price_drops does for pagination -- there's no
+    OFFSET/LIMIT here to push into SQL, so a plain per-shop loop is
+    simpler and just as bounded (a day's drops are a small fraction of
+    the catalog).
+    """
+    ids = [shop_id] if shop_id is not None else list(shop_labels_by_id)
+    latest = get_latest_snapshots_for_all_shops(session, ids)
+    for sid, snap in latest.items():
+        previous = _get_previous_snapshot(session, sid, snap.snapshot_date)
+        if previous is None:
+            continue
+        label = shop_labels_by_id[sid]
+        query = _shop_price_drops_query(
+            session, sid, snap, previous, q=q, category=category, min_drop_pct=min_drop_pct
+        ).order_by(literal_column("drop_pct").desc())
+        for name, cat, code, price, prev_price, size_info, mud, row_shop_id, snapshot_date, drop_pct in query:
+            yield {
+                "shop_id": row_shop_id,
+                "shop_label": label,
+                "name": name,
+                "category": cat,
+                "code": code,
+                "price": price,
+                "prev_price": prev_price,
+                "drop_pct": drop_pct,
+                "snapshot_date": snapshot_date,
+            }

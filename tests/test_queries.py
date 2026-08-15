@@ -12,6 +12,8 @@ from queries import (
     deal_tier,
     get_price_drops,
     get_product_across_shops,
+    iter_all_bugs,
+    iter_all_drops,
     search_products,
 )
 from shops import SHOPS
@@ -613,5 +615,126 @@ def test_get_bug_streaks_respects_max_days_cap():
         # Only the most recent 2 snapshots count toward the streak.
         streaks = get_bug_streaks(session, SHOP_A, ["c1"], "zero", max_days=2)
         assert streaks["c1"] == 2
+    finally:
+        session.close()
+
+
+def test_iter_all_bugs_yields_zero_price_and_placeholder_rows():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    {"id": 1, "code": "c1", "name": "Free Bug", "price": 0.0, "tags": []},
+                    {
+                        "id": 2,
+                        "code": "c2",
+                        "name": "Placeholder Bug",
+                        "price": 2.0,
+                        "tags": ["l30d:0.01"],
+                    },
+                    {"id": 3, "code": "c3", "name": "Clean Item", "price": 1.0, "tags": []},
+                ]
+            ),
+        )
+        session.commit()
+
+        rows = list(iter_all_bugs(session, {SHOP_A: SHOP_A_LABEL}))
+        names_and_types = {(r["name"], r["bug_type"]) for r in rows}
+        assert ("Free Bug", "zero_price") in names_and_types
+        assert ("Placeholder Bug", "placeholder_reference") in names_and_types
+        assert not any(r["name"] == "Clean Item" for r in rows)
+    finally:
+        session.close()
+
+
+def test_iter_all_bugs_filters_by_shop():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog([{"id": 1, "code": "c1", "name": "Bug In A", "price": 0.0, "tags": []}]),
+        )
+        store_snapshot(
+            session,
+            SHOP_B,
+            SHOP_B_LABEL,
+            "2026-08-13",
+            _catalog([{"id": 2, "code": "c2", "name": "Bug In B", "price": 0.0, "tags": []}]),
+        )
+        session.commit()
+
+        rows = list(iter_all_bugs(session, {SHOP_A: SHOP_A_LABEL, SHOP_B: SHOP_B_LABEL}, shop_id=SHOP_A))
+        names = {r["name"] for r in rows}
+        assert names == {"Bug In A"}
+    finally:
+        session.close()
+
+
+def test_iter_all_drops_yields_only_price_drops():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-12",
+            _catalog(
+                [
+                    {"id": 1, "code": "c1", "name": "Dropped", "price": 10.0, "tags": []},
+                    {"id": 2, "code": "c2", "name": "Steady", "price": 3.0, "tags": []},
+                ]
+            ),
+        )
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    {"id": 1, "code": "c1", "name": "Dropped", "price": 7.5, "tags": []},
+                    {"id": 2, "code": "c2", "name": "Steady", "price": 3.0, "tags": []},
+                ]
+            ),
+        )
+        session.commit()
+
+        rows = list(iter_all_drops(session, {SHOP_A: SHOP_A_LABEL}))
+        assert len(rows) == 1
+        assert rows[0]["name"] == "Dropped"
+        assert rows[0]["drop_pct"] == pytest.approx(25.0)
+    finally:
+        session.close()
+
+
+def test_iter_all_drops_min_drop_pct_excludes_smaller_drops():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-12",
+            _catalog([{"id": 1, "code": "c1", "name": "Small Drop", "price": 10.0, "tags": []}]),
+        )
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog([{"id": 1, "code": "c1", "name": "Small Drop", "price": 9.0, "tags": []}]),
+        )
+        session.commit()
+
+        rows = list(iter_all_drops(session, {SHOP_A: SHOP_A_LABEL}, min_drop_pct=50.0))
+        assert rows == []
     finally:
         session.close()

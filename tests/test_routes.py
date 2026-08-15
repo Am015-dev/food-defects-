@@ -781,6 +781,62 @@ def test_download_csv_category_filter_applies_to_every_shop(client):
     assert "Meat Deal" in body
 
 
+def test_download_bugs_csv(client, seeded):
+    resp = client.get("/download/bugs.csv")
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/csv"
+    assert resp.headers["Content-Disposition"] == "attachment; filename=food_defects_bugs.csv"
+    body = resp.get_data(as_text=True)
+    assert "Μηδενική Τιμή" in body
+    assert "zero_price" in body
+    assert "Πλασματική Τιμή" in body
+    assert "placeholder_reference" in body
+    # A verified deal is not a "bug" -- it must not leak into this export.
+    assert "Πραγματική Προσφορά" not in body
+
+
+def test_download_bugs_csv_filtered_by_shop(client, seeded):
+    resp = client.get("/download/bugs.csv", query_string={"shop_id": str(SHOP_B)})
+    body = resp.get_data(as_text=True)
+    assert "Μηδενική Τιμή" not in body  # that bug lives in shop A, not B
+
+
+def test_download_drops_csv(client, seeded_with_drop):
+    resp = client.get("/download/drops.csv")
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/csv"
+    assert resp.headers["Content-Disposition"] == "attachment; filename=food_defects_drops.csv"
+    body = resp.get_data(as_text=True)
+    assert DROP_PRODUCT in body
+    assert STEADY_PRODUCT not in body  # unchanged price, not a drop
+
+
+def test_download_drops_csv_min_drop_pct_filters(client, seeded_with_drop):
+    # The seeded drop is 10.0 -> 7.5, a 25% fall.
+    resp = client.get("/download/drops.csv", query_string={"min_drop_pct": "50"})
+    assert DROP_PRODUCT not in resp.get_data(as_text=True)
+
+    resp = client.get("/download/drops.csv", query_string={"min_drop_pct": "10"})
+    assert DROP_PRODUCT in resp.get_data(as_text=True)
+
+
+def test_deals_page_links_to_filtered_csv_export(client, seeded):
+    resp = client.get("/deals", query_string={"shop": str(SHOP_A)})
+    body = resp.get_data(as_text=True)
+    assert f"/download/sales.csv?shop_id={SHOP_A}" in body
+
+
+def test_drops_page_links_to_filtered_csv_export(client, seeded_with_drop):
+    resp = client.get("/drops", query_string={"shop": str(SHOP_A)})
+    body = resp.get_data(as_text=True)
+    assert f"/download/drops.csv?shop_id={SHOP_A}" in body
+
+
+def test_dashboard_links_to_bugs_csv_export(client, seeded):
+    body = client.get("/").get_data(as_text=True)
+    assert "/download/bugs.csv" in body
+
+
 def test_item_page_unknown_shop_404s(client):
     resp = client.get("/item/999999/some-code")
     assert resp.status_code == 404

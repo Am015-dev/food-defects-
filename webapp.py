@@ -51,6 +51,8 @@ from queries import (
     get_product_across_shops,
     get_shop_bug_rates,
     get_trend,
+    iter_all_bugs,
+    iter_all_drops,
     iter_all_sales,
     search_products,
 )
@@ -937,6 +939,127 @@ def download_sales_csv():
         generate(),
         mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=masoutis_sale_cases.csv"},
+    )
+
+
+BUGS_CSV_HEADER = [
+    "shop",
+    "category",
+    "product",
+    "price",
+    "30_day_low_price",
+    "bug_type",
+    "snapshot_date",
+    "verify_url",
+]
+
+
+@app.route("/download/bugs.csv")
+@limiter.limit("20 per hour")
+def download_bugs_csv():
+    shop_id = request.args.get("shop_id", type=int)
+    q = (request.args.get("q") or "").strip() or None
+    category = (request.args.get("category") or "").strip() or None
+    base_url = request.url_root.rstrip("/")
+
+    def generate():
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+
+        def flush():
+            value = buf.getvalue()
+            buf.seek(0)
+            buf.truncate(0)
+            return value
+
+        writer.writerow(BUGS_CSV_HEADER)
+        yield flush()
+
+        session = SessionLocal()
+        try:
+            for r in iter_all_bugs(session, SHOP_LABELS, shop_id=shop_id, q=q, category=category):
+                writer.writerow(
+                    [
+                        r["shop_label"],
+                        r["category"],
+                        r["name"],
+                        f'{r["price"]:.2f}',
+                        f'{r["l30d_price"]:.2f}' if r["l30d_price"] is not None else "",
+                        r["bug_type"],
+                        r["snapshot_date"],
+                        f"{base_url}/item/{r['shop_id']}/{r['code']}" if r.get("code") else "",
+                    ]
+                )
+                yield flush()
+        finally:
+            session.close()
+
+    return Response(
+        generate(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=food_defects_bugs.csv"},
+    )
+
+
+DROPS_CSV_HEADER = [
+    "shop",
+    "category",
+    "product",
+    "price_now",
+    "price_before",
+    "drop_pct",
+    "snapshot_date",
+    "verify_url",
+]
+
+
+@app.route("/download/drops.csv")
+@limiter.limit("20 per hour")
+def download_drops_csv():
+    shop_id = request.args.get("shop_id", type=int)
+    q = (request.args.get("q") or "").strip() or None
+    category = (request.args.get("category") or "").strip() or None
+    min_drop_pct = request.args.get("min_drop_pct", type=float)
+    base_url = request.url_root.rstrip("/")
+
+    def generate():
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+
+        def flush():
+            value = buf.getvalue()
+            buf.seek(0)
+            buf.truncate(0)
+            return value
+
+        writer.writerow(DROPS_CSV_HEADER)
+        yield flush()
+
+        session = SessionLocal()
+        try:
+            for r in iter_all_drops(
+                session, SHOP_LABELS, shop_id=shop_id, q=q, category=category, min_drop_pct=min_drop_pct
+            ):
+                writer.writerow(
+                    [
+                        r["shop_label"],
+                        r["category"],
+                        r["name"],
+                        f'{r["price"]:.2f}',
+                        f'{r["prev_price"]:.2f}',
+                        f'{r["drop_pct"]:.1f}',
+                        r["snapshot_date"],
+                        f"{base_url}/item/{r['shop_id']}/{r['code']}" if r.get("code") else "",
+                    ]
+                )
+                yield flush()
+        finally:
+            session.close()
+
+    return Response(
+        generate(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=food_defects_drops.csv"},
     )
 
 

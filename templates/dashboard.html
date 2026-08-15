@@ -69,7 +69,8 @@
 
 {% if bug_type != 'deal' %}
 <section class="panel" id="bugs-summary" data-aos="fade-up">
-  <h2>Σφάλματα τιμών</h2>
+  <h2>Σφάλματα τιμών
+    <a class="ml-8" href="{{ url_for('download_bugs_csv', shop_id=shop_filter, q=q) }}">Λήψη CSV →</a></h2>
 
   {% if bug_type in (None, 'zero') %}
   <div class="section">
