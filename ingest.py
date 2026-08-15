@@ -18,6 +18,7 @@ from sqlalchemy import func
 
 from db import (
     CategoryDailySummary,
+    CategoryUnitPriceMedian,
     ItemPrice,
     PriceExtreme,
     ProductListing,
@@ -36,6 +37,7 @@ from price_analysis import (
 )
 from price_utils import derive_unit_price, fold_name
 from product_matching import match_or_create_product
+from queries import MIN_CATEGORY_SAMPLE
 from shops import SHOPS
 
 MAX_CONCURRENCY = 2  # how many shops to fetch+store at once
@@ -319,6 +321,86 @@ def update_category_daily_summary(session=None, today=None):
             session.close()
 
 
+def update_category_unit_price_medians(session=None):
+    """Recompute the median per-unit price for every (category,
+    unit-kind) bucket across every shop's latest snapshot -- the
+    "is this actually cheap for its type" benchmark queries.
+    get_category_unit_price_medians reads (used by /deals, /item, and
+    /cheap). A real discount off a listing's own history says nothing
+    about whether the result is competitive, so those pages compare
+    against this instead of trusting the discount alone.
+
+    unit_kind isn't a stored ItemPrice column (see db.py's
+    _drop_removed_columns -- it used to be, and was write-only), so
+    it's re-derived here from each row's size_info/metric_unit_description
+    via the same price_utils function that already produced the stored
+    unit_price at ingest time.
+
+    This full-catalog aggregation is exactly what this runner -- not the
+    512MB web service -- is for: scanning every priced listing across
+    every tracked shop at once. Delete-then-bulk-insert, same idempotent
+    pattern as the other rollups above. Meant to run once at the end of
+    a full ingest, after every shop's snapshot for today is written.
+    """
+    owns_session = session is None
+    session = session or SessionLocal()
+    try:
+        latest_ids = []
+        for (shop_id,) in session.query(Shop.id):
+            snap = (
+                session.query(Snapshot)
+                .filter_by(shop_id=shop_id)
+                .order_by(Snapshot.snapshot_date.desc())
+                .first()
+            )
+            if snap is not None:
+                latest_ids.append(snap.id)
+        if not latest_ids:
+            return 0
+
+        buckets = defaultdict(list)
+        query = session.query(
+            ItemPrice.category,
+            ItemPrice.price,
+            ItemPrice.size_info,
+            ItemPrice.metric_unit_description,
+        ).filter(
+            ItemPrice.snapshot_id.in_(latest_ids),
+            ItemPrice.price > 0,
+            ItemPrice.category.isnot(None),
+        )
+        for category, price, size_info, mud in query:
+            unit_price, unit_kind = derive_unit_price(price, size_info, mud)
+            if unit_price is not None:
+                buckets[(category, unit_kind)].append(unit_price)
+
+        session.query(CategoryUnitPriceMedian).delete(synchronize_session=False)
+        now = datetime.now(timezone.utc)
+        new_rows = []
+        for (category, unit_kind), values in buckets.items():
+            if len(values) < MIN_CATEGORY_SAMPLE:
+                continue
+            values.sort()
+            n = len(values)
+            mid = n // 2
+            median = values[mid] if n % 2 else (values[mid - 1] + values[mid]) / 2
+            new_rows.append(
+                CategoryUnitPriceMedian(
+                    category=category,
+                    unit_kind=unit_kind,
+                    median_unit_price=median,
+                    sample_count=n,
+                    updated_at=now,
+                )
+            )
+        session.bulk_save_objects(new_rows)
+        session.commit()
+        return len(new_rows)
+    finally:
+        if owns_session:
+            session.close()
+
+
 def run_ingestion():
     """Fetch and store every tracked shop, with bounded concurrency so
     only a handful of shops' raw catalogs are ever in memory at once.
@@ -356,6 +438,12 @@ def run_ingestion():
         print(f"category summary: wrote {cat_written} row(s) for {today}")
     except Exception as exc:  # noqa: BLE001 - a summary failure shouldn't fail ingestion
         print(f"category summary: failed, will retry next run: {exc}")
+
+    try:
+        median_written = update_category_unit_price_medians()
+        print(f"category unit price medians: refreshed {median_written} row(s)")
+    except Exception as exc:  # noqa: BLE001 - a rollup failure shouldn't fail ingestion
+        print(f"category unit price medians: rollup failed, will retry next run: {exc}")
 
     return {"date": today, "results": results}
 

@@ -8,7 +8,7 @@ import pytest
 import requests
 from flask import g
 
-from db import SessionLocal
+from db import CategoryUnitPriceMedian, SessionLocal
 from ingest import store_snapshot
 from shops import SHOPS
 
@@ -60,6 +60,28 @@ def _item(id_, name, price, **extra):
     return d
 
 
+def _seed_category_median(category, unit_kind, median_unit_price, sample_count=5):
+    """Insert a precomputed category_unit_price_medians row directly --
+    stands in for ingest.update_category_unit_price_medians, which
+    queries.get_category_unit_price_medians reads from since it no
+    longer scans ItemPrice live (see the GitHub-Actions-only rollup
+    architecture)."""
+    session = SessionLocal()
+    try:
+        session.add(
+            CategoryUnitPriceMedian(
+                category=category,
+                unit_kind=unit_kind,
+                median_unit_price=median_unit_price,
+                sample_count=sample_count,
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+
 @pytest.fixture
 def client():
     from webapp import app
@@ -74,6 +96,11 @@ def seeded():
     """Two shops carrying the same product at different prices (for
     /compare and cross-shop comparison), plus one of each bug type in
     shop A (for the dashboard/deals views)."""
+    # Well above "Πραγματική Προσφορά"'s own 0.10€/100g so it clears the
+    # category-competitiveness gate (see
+    # queries.get_category_unit_price_medians) -- stands in for the
+    # nightly ingest.update_category_unit_price_medians rollup.
+    _seed_category_median("Τρόφιμα || Δοκιμαστικά", "100g", median_unit_price=0.30)
     session = SessionLocal()
     try:
         store_snapshot(
@@ -92,11 +119,11 @@ def seeded():
                     ),
                     _item(2, "Μηδενική Τιμή", 0.0),
                     _item(3, "Πλασματική Τιμή", 2.0, tags=["l30d:0.01"]),
-                    # size_info well below the category's other listings
-                    # so this clears the category-competitiveness gate
-                    # (see queries.get_category_unit_price_medians) as
-                    # well as the plain discount-pct rule: 0.10€/100g
-                    # against COMMON_PRODUCT's 0.336/0.42€/100g.
+                    # size_info gives this 0.10€/100g, well below the
+                    # precomputed category median seeded above -- clears
+                    # the category-competitiveness gate (see
+                    # queries.get_category_unit_price_medians) as well
+                    # as the plain discount-pct rule.
                     _item(
                         4,
                         "Πραγματική Προσφορά",
@@ -174,11 +201,12 @@ def seeded_with_misleading_deal():
     reported: a "good price" badge that's true by percentage but still
     not the best per-unit price around.
 
-    Two unrelated, pricier ice creams are seeded alongside so the deal
-    also clears the category-competitiveness gate (see
-    queries.get_category_unit_price_medians) -- 0.5€/100g against a
-    [0.3, 0.5, 0.9, 1.1] category bucket, median 0.7 -- while still
-    costing more per unit than its own identical match in shop B."""
+    The precomputed category median (0.7) is well above the deal's own
+    0.5€/100g, so it also clears the category-competitiveness gate (see
+    queries.get_category_unit_price_medians) -- stands in for the
+    nightly ingest.update_category_unit_price_medians rollup -- while
+    still costing more per unit than its own identical match in shop B."""
+    _seed_category_median("Τρόφιμα || Δοκιμαστικά", "100g", median_unit_price=0.7)
     session = SessionLocal()
     try:
         store_snapshot(
@@ -196,7 +224,6 @@ def seeded_with_misleading_deal():
                         size_info="1kg",
                         tags=["l30d:8.0"],
                     ),
-                    _item(2, "Παγωτό Σοκολάτα Οικογενειακό 1kg", 9.0, size_info="1kg"),
                 ]
             ),
         )
@@ -208,7 +235,6 @@ def seeded_with_misleading_deal():
             _catalog(
                 [
                     _item(101, MISLEADING_DEAL_PRODUCT_B, 3.0, size_info="1kg"),
-                    _item(102, "Παγωτό Φράουλα Οικογενειακό 1kg", 11.0, size_info="1kg"),
                 ]
             ),
         )
@@ -373,6 +399,12 @@ def test_dashboard_hero_shows_drop_when_no_deals_exist(client, seeded_with_drop)
 
 
 def test_dashboard_hero_picks_larger_percentage_between_deal_and_drop(client):
+    # size_info gives "Huge Deal Item" 0.2€/100g, well below the
+    # precomputed category median seeded below -- clears the
+    # category-competitiveness gate (see
+    # queries.get_category_unit_price_medians) as well as the plain
+    # discount-pct rule.
+    _seed_category_median("Τρόφιμα || Δοκιμαστικά", "100g", median_unit_price=0.6)
     session = SessionLocal()
     try:
         # A 25% price drop vs. a 60% verified deal -- the deal must win.
@@ -391,14 +423,7 @@ def test_dashboard_hero_picks_larger_percentage_between_deal_and_drop(client):
             _catalog(
                 [
                     _item(1, "Dropping Item", 7.5),
-                    # size_info + two pricier same-category peers so this
-                    # clears the category-competitiveness gate (see
-                    # queries.get_category_unit_price_medians) as well as
-                    # the plain discount-pct rule -- 0.2€/100g against a
-                    # [0.2, 0.6, 0.6] bucket median of 0.6.
                     _item(2, "Huge Deal Item", 2.0, full_price=8.0, size_info="1kg", tags=["l30d:5.0"]),
-                    _item(3, "Peer Item A", 3.0, size_info="500g"),
-                    _item(4, "Peer Item B", 6.0, size_info="1kg"),
                 ]
             ),
         )
@@ -889,10 +914,12 @@ def test_deals_category_link_points_at_category_browse(client, seeded):
 
 
 def test_deals_shows_streak_badge_for_multi_day_verified_deal(client):
-    # size_info + two pricier same-category peers so this clears the
+    # size_info gives this 0.3€/100g, well below the precomputed
+    # category median seeded below -- clears the
     # category-competitiveness gate (see
     # queries.get_category_unit_price_medians), not just the plain
     # discount-pct rule.
+    _seed_category_median("Τρόφιμα || Δοκιμαστικά", "100g", median_unit_price=0.6)
     item = {
         "id": 1,
         "code": "c1",
@@ -902,14 +929,10 @@ def test_deals_shows_streak_badge_for_multi_day_verified_deal(client):
         "size_info": "1kg",
         "tags": ["l30d:5.0"],
     }
-    peers = [
-        _item(2, "Peer Item A", 3.0, size_info="500g"),
-        _item(3, "Peer Item B", 6.0, size_info="1kg"),
-    ]
     session = SessionLocal()
     try:
-        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-12", _catalog([item, *peers]))
-        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-13", _catalog([item, *peers]))
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-12", _catalog([item]))
+        store_snapshot(session, SHOP_A, SHOP_A_LABEL, "2026-08-13", _catalog([item]))
         session.commit()
     finally:
         session.close()
@@ -1707,6 +1730,7 @@ def test_dashboard_stale_banner_not_masked_by_one_fresh_shop(client):
 
 
 def test_cheap_ranks_best_value_first(client):
+    _seed_category_median("Τρόφιμα || Δοκιμαστικά", "100g", median_unit_price=0.20)
     session = SessionLocal()
     try:
         store_snapshot(
@@ -1732,6 +1756,8 @@ def test_cheap_ranks_best_value_first(client):
 
 
 def test_cheap_category_filter_narrows_results(client):
+    _seed_category_median("Cat A", "100g", median_unit_price=0.20)
+    _seed_category_median("Cat B", "100g", median_unit_price=0.20)
     session = SessionLocal()
     try:
         store_snapshot(

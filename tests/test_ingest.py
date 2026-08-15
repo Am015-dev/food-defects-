@@ -3,8 +3,15 @@ update_category_daily_summary -- the nightly rollups that pre-aggregate
 data the web service would otherwise have to scan full item_prices
 history live to compute."""
 
-from db import CategoryDailySummary, PriceExtreme, SessionLocal
-from ingest import store_snapshot, update_category_daily_summary, update_price_extremes_rollup
+import pytest
+
+from db import CategoryDailySummary, CategoryUnitPriceMedian, PriceExtreme, SessionLocal
+from ingest import (
+    store_snapshot,
+    update_category_daily_summary,
+    update_category_unit_price_medians,
+    update_price_extremes_rollup,
+)
 from shops import SHOPS
 
 SHOP_A = SHOPS[0]["id"]
@@ -302,3 +309,236 @@ def test_category_summary_keeps_separate_rows_per_day():
 def test_category_summary_no_snapshot_for_day_returns_zero():
     written = update_category_daily_summary(today="2099-01-01")
     assert written == 0
+
+
+def _item(id_, name, price, **extra):
+    d = {"id": id_, "code": f"code-{id_}", "name": name, "price": price, "tags": []}
+    d.update(extra)
+    return d
+
+
+def _multi_catalog(categories):
+    """categories: {category_name: [items]}"""
+    return {
+        "information": {"title": "T", "address": {"description": "A"}, "is_open": True},
+        "menu": {"categories": [{"name": name, "items": items} for name, items in categories.items()]},
+    }
+
+
+def test_category_unit_price_medians_computes_per_kind_median():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    _item(1, "Item A", 1.0, size_info="1kg"),  # 0.10 €/100g
+                    _item(2, "Item B", 2.0, size_info="1kg"),  # 0.20 €/100g
+                    _item(3, "Item C", 3.0, size_info="1kg"),  # 0.30 €/100g
+                ]
+            ),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    written = update_category_unit_price_medians()
+    assert written == 1
+
+    session = SessionLocal()
+    try:
+        row = session.query(CategoryUnitPriceMedian).filter_by(category="Τρόφιμα || Test").one()
+        assert row.unit_kind == "100g"
+        assert row.median_unit_price == pytest.approx(0.20)
+        assert row.sample_count == 3
+    finally:
+        session.close()
+
+
+def test_category_unit_price_medians_keeps_kinds_separate():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    _item(1, "Weight A", 1.0, size_info="1kg"),
+                    _item(2, "Weight B", 2.0, size_info="1kg"),
+                    _item(3, "Weight C", 3.0, size_info="1kg"),
+                    _item(4, "Volume A", 9.0, size_info="1l"),
+                    _item(5, "Volume B", 10.0, size_info="1l"),
+                    _item(6, "Volume C", 11.0, size_info="1l"),
+                ]
+            ),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    written = update_category_unit_price_medians()
+    assert written == 2
+
+    session = SessionLocal()
+    try:
+        rows = {
+            r.unit_kind: r.median_unit_price
+            for r in session.query(CategoryUnitPriceMedian).filter_by(category="Τρόφιμα || Test")
+        }
+        assert rows["100g"] == pytest.approx(0.20)
+        assert rows["100ml"] == pytest.approx(1.00)
+    finally:
+        session.close()
+
+
+def test_category_unit_price_medians_omits_bucket_below_min_sample():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    _item(1, "Item A", 1.0, size_info="1kg"),
+                    _item(2, "Item B", 2.0, size_info="1kg"),
+                ]
+            ),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    written = update_category_unit_price_medians()
+    assert written == 0
+
+
+def test_category_unit_price_medians_covers_every_tracked_shop():
+    # The benchmark is "cheap for its type across the whole market", not
+    # just one shop -- items from two different shops in the same
+    # category must land in the same bucket.
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog([_item(1, "A1", 1.0, size_info="1kg"), _item(2, "A2", 2.0, size_info="1kg")]),
+        )
+        store_snapshot(
+            session,
+            SHOP_B,
+            SHOP_B_LABEL,
+            "2026-08-13",
+            _catalog([_item(3, "B1", 3.0, size_info="1kg")]),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    written = update_category_unit_price_medians()
+    assert written == 1
+
+    session = SessionLocal()
+    try:
+        row = session.query(CategoryUnitPriceMedian).filter_by(category="Τρόφιμα || Test").one()
+        assert row.sample_count == 3
+        assert row.median_unit_price == pytest.approx(0.20)
+    finally:
+        session.close()
+
+
+def test_category_unit_price_medians_reruns_replace_not_duplicate():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog(
+                [
+                    _item(1, "Item A", 1.0, size_info="1kg"),
+                    _item(2, "Item B", 2.0, size_info="1kg"),
+                    _item(3, "Item C", 3.0, size_info="1kg"),
+                ]
+            ),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    update_category_unit_price_medians()
+    update_category_unit_price_medians()  # rerun must not duplicate the row
+
+    session = SessionLocal()
+    try:
+        assert session.query(CategoryUnitPriceMedian).filter_by(category="Τρόφιμα || Test").count() == 1
+    finally:
+        session.close()
+
+
+def test_category_unit_price_medians_ignores_unparseable_listings():
+    # No size_info and no metric_unit_description -- derive_unit_price
+    # returns None for these, so they can't contribute to any bucket.
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog([_item(1, "No Size", 1.0), _item(2, "Also No Size", 2.0)]),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    written = update_category_unit_price_medians()
+    assert written == 0
+
+
+def test_category_unit_price_medians_multiple_categories_scored_independently():
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _multi_catalog(
+                {
+                    "Cat A": [
+                        _item(1, "A1", 1.0, size_info="1kg"),
+                        _item(2, "A2", 2.0, size_info="1kg"),
+                        _item(3, "A3", 3.0, size_info="1kg"),
+                    ],
+                    "Cat B": [
+                        _item(4, "B1", 10.0, size_info="1kg"),
+                        _item(5, "B2", 20.0, size_info="1kg"),
+                        _item(6, "B3", 30.0, size_info="1kg"),
+                    ],
+                }
+            ),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    written = update_category_unit_price_medians()
+    assert written == 2
+
+    session = SessionLocal()
+    try:
+        rows = {r.category: r.median_unit_price for r in session.query(CategoryUnitPriceMedian)}
+        assert rows["Cat A"] == pytest.approx(0.20)
+        assert rows["Cat B"] == pytest.approx(2.00)
+    finally:
+        session.close()

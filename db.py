@@ -169,6 +169,33 @@ class CategoryDailySummary(Base):
     __table_args__ = (UniqueConstraint("category", "snapshot_date", name="uq_category_summary_day"),)
 
 
+class CategoryUnitPriceMedian(Base):
+    """One row per (category, unit-price kind -- "100g"/"100ml"/a literal
+    count unit like "τεμ") -- the median per-unit price across every
+    tracked shop's latest snapshot right now. This is the "is this
+    actually cheap for its type" benchmark /deals, /item, and /cheap all
+    read (see queries.get_category_unit_price_medians): a real discount
+    off a listing's own history says nothing about whether the result
+    is competitive, so those pages compare against this instead.
+
+    Computed once per ingest run on the GitHub Actions runner (see
+    ingest.update_category_unit_price_medians), which has the RAM to
+    scan every priced item across the whole catalog at once -- same
+    reasoning as PriceExtreme above. The web service only ever reads
+    this small precomputed table, never recomputes it live."""
+
+    __tablename__ = "category_unit_price_medians"
+
+    id = Column(Integer, primary_key=True)
+    category = Column(String, nullable=False)
+    unit_kind = Column(String, nullable=False)
+    median_unit_price = Column(Float, nullable=False)
+    sample_count = Column(Integer, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (UniqueConstraint("category", "unit_kind", name="uq_category_unit_kind"),)
+
+
 def _add_missing_columns():
     """Tiny forward-only migration.
 
@@ -263,6 +290,11 @@ def _ensure_indexes():
         # get_category_trend filters by category and orders by date.
         "CREATE INDEX IF NOT EXISTS ix_category_summary_category_date "
         "ON category_daily_summaries (category, snapshot_date)",
+        # get_category_unit_price_medians filters by an IN-list of
+        # categories (unit_kind isn't part of the predicate, only the
+        # returned columns), so a category-only index serves it directly.
+        "CREATE INDEX IF NOT EXISTS ix_category_unit_price_medians_category "
+        "ON category_unit_price_medians (category)",
     ]
     with engine.begin() as conn:
         for statement in statements:

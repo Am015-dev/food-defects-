@@ -1586,9 +1586,7 @@ def verify_item(shop_id, code):
         # now -- see queries.is_category_competitive.
         category_competitive = False
         if stored is not None and stored.is_verified_deal:
-            medians = get_category_unit_price_medians(
-                session, {stored.category}, SHOP_LABELS, latest=latest
-            )
+            medians = get_category_unit_price_medians(session, {stored.category})
             category_competitive = is_category_competitive(
                 stored.price, stored.category, stored.size_info, stored.metric_unit_description, medians
             )

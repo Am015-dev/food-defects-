@@ -3,9 +3,11 @@ bypassing the Flask route/template layer for precision on things like
 exact pagination math and join semantics that a route-level test (which
 mostly just checks page text) can't easily pin down."""
 
+from datetime import datetime, timezone
+
 import pytest
 
-from db import SessionLocal
+from db import CategoryUnitPriceMedian, SessionLocal
 from ingest import store_snapshot
 from queries import (
     compare_across_shops,
@@ -48,6 +50,28 @@ def _multi_catalog(categories):
         "information": {"title": "T", "address": {"description": "A"}, "is_open": True},
         "menu": {"categories": [{"name": name, "items": items} for name, items in categories.items()]},
     }
+
+
+def _seed_category_median(category, unit_kind, median_unit_price, sample_count=5):
+    """Insert a precomputed category_unit_price_medians row directly --
+    stands in for ingest.update_category_unit_price_medians, which
+    queries.get_category_unit_price_medians reads from since it no
+    longer scans ItemPrice live (see the GitHub-Actions-only rollup
+    architecture)."""
+    session = SessionLocal()
+    try:
+        session.add(
+            CategoryUnitPriceMedian(
+                category=category,
+                unit_kind=unit_kind,
+                median_unit_price=median_unit_price,
+                sample_count=sample_count,
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
 
 
 def _item(id_, name, price, **extra):
@@ -1122,6 +1146,11 @@ def test_get_category_trend_unknown_category_is_empty():
 
 
 def test_get_new_verified_deals_counts_first_ever_snapshot_as_new():
+    # Precomputed median well above this deal's own 0.10 €/100g (3.0€ /
+    # 3kg) so it also clears the category-competitiveness gate (see
+    # queries.get_category_unit_price_medians), not just the plain
+    # discount-pct rule.
+    _seed_category_median("Cat", "100g", median_unit_price=0.30)
     session = SessionLocal()
     try:
         store_snapshot(
@@ -1140,12 +1169,6 @@ def test_get_new_verified_deals_counts_first_ever_snapshot_as_new():
                         "size_info": "3kg",
                         "tags": ["l30d:5.0"],
                     },
-                    # Pricier same-category peers so this also clears the
-                    # category-competitiveness gate (see
-                    # queries.get_category_unit_price_medians), not just
-                    # the plain discount-pct rule.
-                    _item(2, "Peer Item A", 3.0, size_info="500g"),
-                    _item(3, "Peer Item B", 6.0, size_info="1kg"),
                 ]
             ),
         )
@@ -1179,6 +1202,7 @@ def test_get_new_verified_deals_excludes_deals_still_running_from_yesterday():
 
 
 def test_get_new_verified_deals_includes_a_deal_that_just_started_today():
+    _seed_category_median("Cat", "100g", median_unit_price=0.30)
     session = SessionLocal()
     try:
         store_snapshot(
@@ -1204,12 +1228,6 @@ def test_get_new_verified_deals_includes_a_deal_that_just_started_today():
                         "size_info": "3kg",
                         "tags": ["l30d:5.0"],
                     },
-                    # Pricier same-category peers so this also clears the
-                    # category-competitiveness gate (see
-                    # queries.get_category_unit_price_medians), not just
-                    # the plain discount-pct rule.
-                    _item(2, "Peer Item A", 3.0, size_info="500g"),
-                    _item(3, "Peer Item B", 6.0, size_info="1kg"),
                 ]
             ),
         )
@@ -1317,82 +1335,50 @@ def test_get_cheapest_unit_price_by_product_omits_products_with_no_unit_price():
         session.close()
 
 
-def test_get_category_unit_price_medians_computes_per_kind_median():
+def test_get_category_unit_price_medians_reads_precomputed_table():
+    # The actual median computation is ingest.update_category_unit_price_medians'
+    # job now (see test_ingest.py) -- this just checks the read side reads
+    # the table it wrote, keyed by (category, unit_kind).
+    _seed_category_median("Cat", "100g", median_unit_price=0.25, sample_count=4)
+    _seed_category_median("Cat", "100ml", median_unit_price=1.00, sample_count=3)
+
     session = SessionLocal()
     try:
-        store_snapshot(
-            session,
-            SHOP_A,
-            SHOP_A_LABEL,
-            "2026-08-13",
-            _catalog(
-                [
-                    _item(1, "Item A", 1.0, size_info="1kg"),  # 0.10 €/100g
-                    _item(2, "Item B", 2.0, size_info="1kg"),  # 0.20 €/100g
-                    _item(3, "Item C", 3.0, size_info="1kg"),  # 0.30 €/100g
-                    _item(4, "Item D", 4.0, size_info="1kg"),  # 0.40 €/100g
-                ]
-            ),
-        )
-        session.commit()
-
-        medians = get_category_unit_price_medians(session, {"Cat"}, {SHOP_A: SHOP_A_LABEL})
-        assert medians[("Cat", "100g")] == pytest.approx(0.25)  # (0.20 + 0.30) / 2
+        medians = get_category_unit_price_medians(session, {"Cat"})
+        assert medians == {("Cat", "100g"): 0.25, ("Cat", "100ml"): 1.00}
     finally:
         session.close()
 
 
-def test_get_category_unit_price_medians_omits_bucket_below_min_sample():
-    # Only two priced, comparable items in the category -- too few to
-    # trust a median against (see queries.MIN_CATEGORY_SAMPLE).
+def test_get_category_unit_price_medians_filters_to_requested_categories():
+    _seed_category_median("Cat A", "100g", median_unit_price=0.10)
+    _seed_category_median("Cat B", "100g", median_unit_price=0.20)
+
     session = SessionLocal()
     try:
-        store_snapshot(
-            session,
-            SHOP_A,
-            SHOP_A_LABEL,
-            "2026-08-13",
-            _catalog(
-                [
-                    _item(1, "Item A", 1.0, size_info="1kg"),
-                    _item(2, "Item B", 2.0, size_info="1kg"),
-                ]
-            ),
-        )
-        session.commit()
-
-        medians = get_category_unit_price_medians(session, {"Cat"}, {SHOP_A: SHOP_A_LABEL})
-        assert medians == {}
+        medians = get_category_unit_price_medians(session, {"Cat A"})
+        assert medians == {("Cat A", "100g"): 0.10}
     finally:
         session.close()
 
 
-def test_get_category_unit_price_medians_keeps_unit_kinds_separate():
-    # A €/100g bucket and a €/100ml bucket in the same category must not
-    # be pooled into one median -- the scales aren't interchangeable.
+def test_get_category_unit_price_medians_empty_categories_returns_empty():
     session = SessionLocal()
     try:
-        store_snapshot(
-            session,
-            SHOP_A,
-            SHOP_A_LABEL,
-            "2026-08-13",
-            _catalog(
-                [
-                    _item(1, "Weight A", 1.0, size_info="1kg"),  # 0.10 €/100g
-                    _item(2, "Weight B", 2.0, size_info="1kg"),  # 0.20 €/100g
-                    _item(3, "Weight C", 3.0, size_info="1kg"),  # 0.30 €/100g
-                    _item(4, "Volume A", 9.0, size_info="1l"),  # 0.90 €/100ml
-                    _item(5, "Volume B", 10.0, size_info="1l"),  # 1.00 €/100ml
-                    _item(6, "Volume C", 11.0, size_info="1l"),  # 1.10 €/100ml
-                ]
-            ),
-        )
-        session.commit()
+        assert get_category_unit_price_medians(session, set()) == {}
+        assert get_category_unit_price_medians(session, {None}) == {}
+    finally:
+        session.close()
 
-        medians = get_category_unit_price_medians(session, {"Cat"}, {SHOP_A: SHOP_A_LABEL})
-        assert medians[("Cat", "100g")] == pytest.approx(0.20)
-        assert medians[("Cat", "100ml")] == pytest.approx(1.00)
+
+def test_get_category_unit_price_medians_no_row_for_category_is_absent():
+    # Nothing precomputed yet for this category (e.g. before the first
+    # ingest rollup has run) -- must be missing from the result, not a
+    # None/0 placeholder, so is_category_competitive's "no benchmark"
+    # branch is what handles it.
+    session = SessionLocal()
+    try:
+        assert get_category_unit_price_medians(session, {"Never Seeded"}) == {}
     finally:
         session.close()
 
@@ -1420,9 +1406,11 @@ def test_is_category_competitive_false_with_no_parseable_unit_price():
 
 def test_get_deals_page_excludes_deal_not_cheap_for_its_category():
     # The exact scenario a user reported live: an ice cream discounted
-    # deeply off its own history, but still pricier per unit than
-    # ordinary-priced peers in the same category -- it must not surface
-    # as a "good deal" just because the percentage math checks out.
+    # deeply off its own history, but still pricier per unit (0.50
+    # €/100g) than the precomputed category median -- it must not
+    # surface as a "good deal" just because the percentage math checks
+    # out.
+    _seed_category_median("Cat", "100g", median_unit_price=0.20)
     session = SessionLocal()
     try:
         store_snapshot(
@@ -1432,12 +1420,9 @@ def test_get_deals_page_excludes_deal_not_cheap_for_its_category():
             "2026-08-13",
             _catalog(
                 [
-                    # Real 37.5% discount (8.0 -> 5.0), but 0.50 €/100g is
-                    # still the priciest of the category's four listings.
+                    # Real 37.5% discount (8.0 -> 5.0), but still above
+                    # the 0.20 €/100g median seeded above.
                     _item(1, "Ice Cream Deal", 5.0, full_price=16.0, size_info="1kg", tags=["l30d:8.0"]),
-                    _item(2, "Peer A", 1.0, size_info="1kg"),  # 0.10 €/100g
-                    _item(3, "Peer B", 2.0, size_info="1kg"),  # 0.20 €/100g
-                    _item(4, "Peer C", 3.0, size_info="1kg"),  # 0.30 €/100g
                 ]
             ),
         )
@@ -1451,6 +1436,9 @@ def test_get_deals_page_excludes_deal_not_cheap_for_its_category():
 
 
 def test_get_deals_page_includes_deal_that_is_cheap_for_its_category():
+    # Same 37.5% discount as the excluded case above, but this time the
+    # deal's own 0.10 €/100g sits BELOW the precomputed category median.
+    _seed_category_median("Cat", "100g", median_unit_price=0.40)
     session = SessionLocal()
     try:
         store_snapshot(
@@ -1460,12 +1448,7 @@ def test_get_deals_page_includes_deal_that_is_cheap_for_its_category():
             "2026-08-13",
             _catalog(
                 [
-                    # Same 37.5% discount, but 0.10 €/100g is now the
-                    # CHEAPEST of the category's four listings.
                     _item(1, "Ice Cream Deal", 1.0, full_price=3.2, size_info="1kg", tags=["l30d:1.6"]),
-                    _item(2, "Peer A", 3.0, size_info="1kg"),  # 0.30 €/100g
-                    _item(3, "Peer B", 4.0, size_info="1kg"),  # 0.40 €/100g
-                    _item(4, "Peer C", 5.0, size_info="1kg"),  # 0.50 €/100g
                 ]
             ),
         )
@@ -1481,6 +1464,7 @@ def test_get_deals_page_includes_deal_that_is_cheap_for_its_category():
 def test_get_best_value_picks_ranks_cheapest_relative_to_category_first():
     # No discount/sale flag on any of these -- get_best_value_picks
     # answers "what's actually cheap" independent of /deals entirely.
+    _seed_category_median("Cat", "100g", median_unit_price=0.20)
     session = SessionLocal()
     try:
         store_snapshot(
@@ -1508,8 +1492,8 @@ def test_get_best_value_picks_ranks_cheapest_relative_to_category_first():
 
 
 def test_get_best_value_picks_excludes_items_without_a_benchmark():
-    # Only two comparable items -- below MIN_CATEGORY_SAMPLE, so neither
-    # has a trustworthy median to rank against.
+    # No precomputed median for this category yet (e.g. before the next
+    # ingest rollup runs) -- nothing to rank these items against.
     session = SessionLocal()
     try:
         store_snapshot(
@@ -1534,6 +1518,8 @@ def test_get_best_value_picks_excludes_items_without_a_benchmark():
 
 
 def test_get_best_value_picks_category_filter_narrows_results():
+    _seed_category_median("Cat A", "100g", median_unit_price=0.20)
+    _seed_category_median("Cat B", "100g", median_unit_price=0.20)
     session = SessionLocal()
     try:
         store_snapshot(

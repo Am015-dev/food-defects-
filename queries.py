@@ -9,7 +9,15 @@ from collections import defaultdict
 from sqlalchemy import and_, func, literal, literal_column, or_
 from sqlalchemy.orm import aliased
 
-from db import CategoryDailySummary, ItemPrice, PriceExtreme, Product, ProductListing, Snapshot
+from db import (
+    CategoryDailySummary,
+    CategoryUnitPriceMedian,
+    ItemPrice,
+    PriceExtreme,
+    Product,
+    ProductListing,
+    Snapshot,
+)
 from price_utils import derive_unit_price, fold_name
 
 
@@ -503,9 +511,7 @@ def get_deals_page(
         )
 
     categories_present = {r["category"] for r in candidates}
-    medians = get_category_unit_price_medians(
-        session, categories_present, shop_labels_by_id, latest=full_latest
-    )
+    medians = get_category_unit_price_medians(session, categories_present)
     results = [
         r
         for r in candidates
@@ -1084,7 +1090,7 @@ def get_new_verified_deals(session, shop_labels_by_id, limit=50, latest=None):
             )
 
     categories_present = {r["category"] for r in candidates}
-    medians = get_category_unit_price_medians(session, categories_present, shop_labels_by_id, latest=latest)
+    medians = get_category_unit_price_medians(session, categories_present)
     results = [
         r
         for r in candidates
@@ -1320,7 +1326,7 @@ def get_cheapest_unit_price_by_product(session, product_ids, shop_labels_by_id, 
 MIN_CATEGORY_SAMPLE = 3
 
 
-def get_category_unit_price_medians(session, categories, shop_labels_by_id, latest=None):
+def get_category_unit_price_medians(session, categories):
     """For each (category, unit-price kind) pair -- e.g. ("Τρόφιμα ||
     Παγωτά", "100g") -- the median per-unit price currently on shelf
     across every tracked shop's latest snapshot. This is the "is this
@@ -1328,56 +1334,30 @@ def get_category_unit_price_medians(session, categories, shop_labels_by_id, late
     can't provide: a real price cut off an already-overpriced product is
     still an overpriced product.
 
-    Kinds ("100g" vs "100ml" vs a literal count unit like "τεμ") are
-    kept separate because those scales aren't interchangeable -- see
-    price_utils.derive_unit_price. unit_kind isn't a stored column (it
-    used to be, and was dropped for being write-only -- see db.py's
-    _drop_removed_columns), so it's re-derived here from the
-    still-stored size_info/metric_unit_description; that's the exact
-    same pure function ingest.py already ran to produce the stored
-    unit_price, so the two never disagree.
+    Reads the precomputed category_unit_price_medians table (see
+    ingest.update_category_unit_price_medians) instead of scanning
+    ItemPrice live -- that full-catalog aggregation runs once per
+    ingest on the GitHub Actions runner, not on every /deals, /item, or
+    /cheap request against the 512MB web service (same reasoning as
+    PriceExtreme/CategoryDailySummary). Kinds ("100g" vs "100ml" vs a
+    literal count unit like "τεμ") are kept separate in the table
+    because those scales aren't interchangeable -- see
+    price_utils.derive_unit_price.
 
-    One query across every shop's latest snapshot for the whole batch of
-    categories, not one per category.
-
-    Returns {(category, unit_kind): median_unit_price}, omitting any
-    bucket with fewer than MIN_CATEGORY_SAMPLE comparable priced items.
+    Returns {(category, unit_kind): median_unit_price} for exactly the
+    requested categories; empty until the next ingest run has populated
+    the table, or for a category with no bucket that cleared
+    MIN_CATEGORY_SAMPLE.
     """
     categories = {c for c in categories if c}
     if not categories:
         return {}
-    if latest is None:
-        latest = get_latest_snapshots_for_all_shops(session, list(shop_labels_by_id))
-    if not latest:
-        return {}
-    snapshot_ids = [snap.id for snap in latest.values()]
-
     rows = session.query(
-        ItemPrice.category,
-        ItemPrice.price,
-        ItemPrice.size_info,
-        ItemPrice.metric_unit_description,
-    ).filter(
-        ItemPrice.snapshot_id.in_(snapshot_ids),
-        ItemPrice.category.in_(list(categories)),
-        ItemPrice.price > 0,
-    )
-
-    buckets = defaultdict(list)
-    for category, price, size_info, metric_unit_description in rows:
-        unit_price, unit_kind = derive_unit_price(price, size_info, metric_unit_description)
-        if unit_price is not None:
-            buckets[(category, unit_kind)].append(unit_price)
-
-    medians = {}
-    for key, values in buckets.items():
-        if len(values) < MIN_CATEGORY_SAMPLE:
-            continue
-        values.sort()
-        n = len(values)
-        mid = n // 2
-        medians[key] = values[mid] if n % 2 else (values[mid - 1] + values[mid]) / 2
-    return medians
+        CategoryUnitPriceMedian.category,
+        CategoryUnitPriceMedian.unit_kind,
+        CategoryUnitPriceMedian.median_unit_price,
+    ).filter(CategoryUnitPriceMedian.category.in_(list(categories)))
+    return {(category, unit_kind): median for category, unit_kind, median in rows}
 
 
 def is_category_competitive(price, category, size_info, metric_unit_description, medians):
@@ -1460,9 +1440,7 @@ def get_best_value_picks(
         )
 
     categories_present = {r["category"] for r in candidates}
-    medians = get_category_unit_price_medians(
-        session, categories_present, shop_labels_by_id, latest=full_latest
-    )
+    medians = get_category_unit_price_medians(session, categories_present)
 
     results = []
     for r in candidates:
