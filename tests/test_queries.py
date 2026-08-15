@@ -13,6 +13,7 @@ from queries import (
     get_basket_comparison,
     get_category_page,
     get_category_trend,
+    get_cheapest_unit_price_by_product,
     get_new_verified_deals,
     get_price_drops,
     get_price_extremes,
@@ -1213,5 +1214,77 @@ def test_get_category_page_optional_q_narrows_further():
         rows, total = get_category_page(session, {SHOP_A: SHOP_A_LABEL}, "Cat", q="Milk")
         assert total == 1
         assert rows[0]["name"] == "Milk"
+    finally:
+        session.close()
+
+
+def test_get_cheapest_unit_price_by_product_finds_cheapest_across_shops():
+    # The scenario the feature exists for: a matched product carried by
+    # two shops at different package prices -- the caller needs the
+    # per-unit cheapest, not just the per-listing cheapest, to catch a
+    # "big discount, still not the best per-litre/per-kilo price" case.
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog([_item(1, "Παγωτό Βανίλια 1kg", 6.0, size_info="1kg")]),
+        )
+        store_snapshot(
+            session,
+            SHOP_B,
+            SHOP_B_LABEL,
+            "2026-08-13",
+            _catalog([_item(2, "Βανίλια Παγωτό 1kg", 3.0, size_info="1kg")]),
+        )
+        session.commit()
+
+        from db import ItemPrice
+
+        a1 = session.query(ItemPrice).filter_by(code="code-1").one()
+        b1 = session.query(ItemPrice).filter_by(code="code-2").one()
+        assert a1.product_id == b1.product_id  # sanity: fuzzy matcher merged them
+
+        shop_labels = {SHOP_A: SHOP_A_LABEL, SHOP_B: SHOP_B_LABEL}
+        result = get_cheapest_unit_price_by_product(session, [a1.product_id], shop_labels)
+        assert result[a1.product_id]["shop_id"] == SHOP_B
+        assert result[a1.product_id]["code"] == "code-2"
+        assert result[a1.product_id]["unit_price"] == pytest.approx(0.3)
+    finally:
+        session.close()
+
+
+def test_get_cheapest_unit_price_by_product_empty_ids_returns_empty():
+    session = SessionLocal()
+    try:
+        assert get_cheapest_unit_price_by_product(session, [], {SHOP_A: SHOP_A_LABEL}) == {}
+        assert get_cheapest_unit_price_by_product(session, [None], {SHOP_A: SHOP_A_LABEL}) == {}
+    finally:
+        session.close()
+
+
+def test_get_cheapest_unit_price_by_product_omits_products_with_no_unit_price():
+    # A listing with no size_info and no metric_unit_description has no
+    # derivable unit_price -- it must not show up in the result at all
+    # (not even with a None value), since callers treat a missing key as
+    # "nothing to compare against".
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            "2026-08-13",
+            _catalog([_item(1, "Ασυσχέτιστο Προϊόν", 4.0)]),
+        )
+        session.commit()
+
+        from db import ItemPrice
+
+        a1 = session.query(ItemPrice).filter_by(code="code-1").one()
+        result = get_cheapest_unit_price_by_product(session, [a1.product_id], {SHOP_A: SHOP_A_LABEL})
+        assert result == {}
     finally:
         session.close()

@@ -30,8 +30,14 @@
     <div class="hero-stats">
       <span class="hero-pct">-{{ "%.0f"|format(hero.hero_pct) }}%</span>
       <span class="hero-price">{{ hero.price|eur }}</span>
+      {% if hero.normalized_display %}<span class="hero-unit">{{ hero.normalized_display }}</span>{% endif %}
       <span class="hero-savings">Εξοικονόμηση {{ hero.savings|eur }} · {{ hero.shop_label }}</span>
     </div>
+    {% if hero.cheaper_elsewhere %}
+    <p class="hero-caveat">⚠ Παρά την έκπτωση, φθηνότερα ανά μονάδα αυτή τη στιγμή στο
+      {% if hero.cheaper_elsewhere.code %}<a href="/item/{{ hero.cheaper_elsewhere.shop_id }}/{{ hero.cheaper_elsewhere.code }}">{{ hero.cheaper_elsewhere.shop_label }}</a>{% else %}{{ hero.cheaper_elsewhere.shop_label }}{% endif %}
+    </p>
+    {% endif %}
   </div>
 </section>
 {% endif %}
@@ -137,7 +143,7 @@
   <div class="table-scroll">
     <table class="cards-mobile">
       <thead>
-        <tr><th>Προϊόν</th><th>Κατάστημα</th><th data-sort>Τιμή</th><th>Αρχική</th><th data-sort>Έκπτωση</th></tr>
+        <tr><th>Προϊόν</th><th>Κατάστημα</th><th data-sort>Τιμή</th><th>Αρχική</th><th data-sort>Έκπτωση</th><th>Ανά μονάδα</th></tr>
       </thead>
       <tbody>
         {% for d in bargains %}
@@ -147,6 +153,12 @@
           <td data-label="Τιμή" class="price-now">{{ d.price|eur }}</td>
           <td data-label="Αρχική" class="price-was">{{ d.full_price|eur }}</td>
           <td data-label="Έκπτωση" class="pct">-{{ "%.0f"|format(d.pct) }}%</td>
+          <td data-label="Ανά μονάδα">
+            {% if d.normalized_display %}<span class="item-cat">{{ d.normalized_display }}</span>{% endif %}
+            {% if d.cheaper_elsewhere %}
+            <span class="badge warn" title="Παρά την έκπτωση, η τιμή ανά μονάδα είναι χαμηλότερη στο {{ d.cheaper_elsewhere.shop_label }} αυτή τη στιγμή">⚠ φθηνότερα στο {{ d.cheaper_elsewhere.shop_label }}</span>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>

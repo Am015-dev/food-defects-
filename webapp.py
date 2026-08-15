@@ -46,8 +46,9 @@ from queries import (
     get_bug_streaks,
     get_categories,
     get_category_page,
-    get_deal_streaks,
     get_category_trend,
+    get_cheapest_unit_price_by_product,
+    get_deal_streaks,
     get_deals_page,
     get_flagged_items_filtered,
     get_history,
@@ -478,6 +479,44 @@ def _enrich_with_comparison_info(rows):
         row.update(comparison_info)
 
 
+# A raw discount percentage is real (verified against this listing's own
+# recent history) but says nothing about whether the resulting price is
+# actually competitive -- a big cut on a small, already-overpriced jar
+# can still cost more per litre/kilo than an ordinary-priced one at
+# another shop. Only flag it once the gap is large enough to be a real
+# difference, not per-shop rounding/measurement noise.
+CHEAPER_ELSEWHERE_MIN_PCT = 10.0
+
+
+def _cheaper_elsewhere(unit_price, shop_id, candidate):
+    """Given a row's own unit_price/shop_id and a candidate {"unit_price",
+    "shop_id", ...} for the same matched product, return the candidate if
+    it's a different shop and meaningfully cheaper per unit, else None."""
+    if not candidate or not unit_price or candidate["shop_id"] == shop_id:
+        return None
+    savings_pct = (unit_price - candidate["unit_price"]) / unit_price * 100
+    return candidate if savings_pct >= CHEAPER_ELSEWHERE_MIN_PCT else None
+
+
+def _annotate_cheaper_elsewhere(session, rows, latest=None):
+    """Flag verified-deal rows (mutating in place, adding
+    "cheaper_elsewhere") whose matched product is available meaningfully
+    cheaper per unit at a different shop right now -- see
+    queries.get_cheapest_unit_price_by_product. Rows need "product_id"
+    and "unit_price" (both selected by get_deals_page) to participate;
+    everything else gets cheaper_elsewhere=None untouched."""
+    product_ids = [r["product_id"] for r in rows if r.get("product_id") and r.get("unit_price")]
+    cheapest_by_product = (
+        get_cheapest_unit_price_by_product(session, product_ids, SHOP_LABELS, latest=latest)
+        if product_ids
+        else {}
+    )
+    for r in rows:
+        r["cheaper_elsewhere"] = _cheaper_elsewhere(
+            r.get("unit_price"), r.get("shop_id"), cheapest_by_product.get(r.get("product_id"))
+        )
+
+
 @app.route("/")
 def dashboard():
     shop_filter = _valid_shop_id()
@@ -522,6 +561,8 @@ def dashboard():
             )
         else:
             bargains, total_deals = [], 0
+        _enrich_with_comparison_info(bargains)
+        _annotate_cheaper_elsewhere(session, bargains, latest=latest)
         trend_rows = get_trend(session)
         price_drops, _ = get_price_drops(session, SHOP_LABELS, page=1, per_page=5, latest=latest)
         # Top shops by bug RATE, not raw count -- pure computation over
@@ -668,6 +709,8 @@ def deals():
             deal_streaks.update(get_deal_streaks(session, sid, codes))
         for r in rows:
             r["streak"] = deal_streaks.get(r["code"], 1) if r.get("code") else 1
+        _enrich_with_comparison_info(rows)
+        _annotate_cheaper_elsewhere(session, rows, latest=latest)
     finally:
         session.close()
 
@@ -1446,6 +1489,17 @@ def verify_item(shop_id, code):
             except Exception:  # noqa: BLE001
                 # If comparison fails, just continue without it
                 shop_comparison = []
+        # Same "is this actually a good price" check as /deals, reusing
+        # shop_comparison instead of a new query -- only one product is
+        # involved here, so no batching is needed.
+        cheapest_elsewhere_candidate = min(
+            (r for r in shop_comparison if r.get("unit_price")),
+            key=lambda r: r["unit_price"],
+            default=None,
+        )
+        cheaper_elsewhere = _cheaper_elsewhere(
+            stored.unit_price if stored else None, shop_id, cheapest_elsewhere_candidate
+        )
     finally:
         session.close()
 
@@ -1543,6 +1597,7 @@ def verify_item(shop_id, code):
         price_chart=price_chart,
         history_points=len(history_rows),
         shop_comparison=shop_comparison,
+        cheaper_elsewhere=cheaper_elsewhere,
     )
 
 

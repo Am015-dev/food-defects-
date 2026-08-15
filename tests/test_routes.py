@@ -142,6 +142,51 @@ def seeded_with_drop():
     return {"shop_a": SHOP_A}
 
 
+MISLEADING_DEAL_PRODUCT_A = "Παγωτό Δοκιμής Βανίλια 1kg"
+MISLEADING_DEAL_PRODUCT_B = "Βανίλια Παγωτό Δοκιμής 1kg"  # same product, reordered, for fuzzy match
+
+
+@pytest.fixture
+def seeded_with_misleading_deal():
+    """A verified deal in shop A (real discount off its own 30-day low)
+    whose matched product -- the same real-world item, per
+    product_matching.py -- sells for meaningfully less per kilo in shop
+    B at an everyday, non-discounted price. The scenario the user
+    reported: a "good price" badge that's true by percentage but still
+    not the best per-unit price around."""
+    session = SessionLocal()
+    try:
+        store_snapshot(
+            session,
+            SHOP_A,
+            SHOP_A_LABEL,
+            TODAY,
+            _catalog(
+                [
+                    _item(
+                        1,
+                        MISLEADING_DEAL_PRODUCT_A,
+                        5.0,
+                        full_price=16.0,
+                        size_info="1kg",
+                        tags=["l30d:8.0"],
+                    ),
+                ]
+            ),
+        )
+        store_snapshot(
+            session,
+            SHOP_B,
+            SHOP_B_LABEL,
+            TODAY,
+            _catalog([_item(101, MISLEADING_DEAL_PRODUCT_B, 3.0, size_info="1kg")]),
+        )
+        session.commit()
+    finally:
+        session.close()
+    return {"shop_a": SHOP_A, "shop_b": SHOP_B}
+
+
 def test_healthz(client):
     resp = client.get("/healthz")
     assert resp.status_code == 200
@@ -270,6 +315,17 @@ def test_dashboard_hero_shows_best_deal(client, seeded):
     assert "Καλύτερη προσφορά σήμερα" in body
     assert "Πραγματική Προσφορά" in body
     assert "-40%" in body  # (5.0 - 3.0) / 5.0 * 100
+
+
+def test_dashboard_flags_misleading_deal_in_hero_and_bargains(client, seeded_with_misleading_deal):
+    # The only bargain seeded is the misleading one, so it becomes both
+    # the hero pick and the sole bargains-table row -- both must carry
+    # the caveat, not just a raw "great discount" headline.
+    body = client.get("/").get_data(as_text=True)
+    assert "Καλύτερη προσφορά σήμερα" in body
+    assert "φθηνότερα ανά μονάδα" in body  # hero caveat sentence
+    assert "φθηνότερα στο" in body  # bargains-table caveat badge
+    assert SHOP_B_LABEL in body
 
 
 def test_dashboard_hero_absent_without_deals_or_drops(client):
@@ -407,6 +463,22 @@ def test_deals_shows_great_tier_badge_for_40_pct_discount(client, seeded):
     # which clears the 35% "great" tier threshold.
     body = client.get("/deals").get_data(as_text=True)
     assert "ΣΠΟΥΔΑΙΑ" in body
+
+
+def test_deals_flags_deal_that_is_still_pricier_per_unit_elsewhere(client, seeded_with_misleading_deal):
+    body = client.get("/deals").get_data(as_text=True)
+    # "⚠" (not just the phrase, which also appears as a plain sort-dropdown
+    # option) pins this to the actual caveat badge.
+    assert "⚠ Φθηνότερα ανά μονάδα" in body
+    assert SHOP_B_LABEL in body
+    assert "0,50€/100g" in body  # shop A's deal price normalized: 5.0€ / 1kg
+
+
+def test_deals_no_caveat_for_deal_without_a_cheaper_match(client, seeded):
+    # Seeded "Πραγματική Προσφορά" has no matched listing in another
+    # shop at all -- nothing to compare against, so no caveat.
+    body = client.get("/deals").get_data(as_text=True)
+    assert "⚠ Φθηνότερα ανά μονάδα" not in body
 
 
 def test_deals_out_of_range_page_shows_real_rows_not_empty(client, seeded):
@@ -1251,6 +1323,19 @@ def test_item_page_explains_verified_deal(client, seeded, monkeypatch):
     body = client.get(f"/item/{SHOP_A}/code-4").get_data(as_text=True)  # Πραγματική Προσφορά
     assert "τουλάχιστον 20% κάτω" in body
     assert "40.0% έκπτωση" in body  # (5.0 - 3.0) / 5.0 * 100
+    # This deal has no matched listing in another shop -- nothing to
+    # compare against, so no "still pricier per unit" caveat.
+    assert "Ακριβό ανά μονάδα" not in body
+
+
+def test_item_page_flags_verified_deal_that_is_pricier_per_unit_elsewhere(
+    client, seeded_with_misleading_deal, monkeypatch
+):
+    _stub_live(monkeypatch, price=5.0)
+    body = client.get(f"/item/{SHOP_A}/code-1").get_data(as_text=True)
+    assert "Ακριβό ανά μονάδα" in body
+    assert SHOP_B_LABEL in body
+    assert f"/item/{SHOP_B}/code-101" in body
 
 
 def test_item_page_no_disclosure_for_unflagged_item(client, seeded, monkeypatch):

@@ -59,6 +59,15 @@
       {{ thumb(d.shop_id, d.code, 160, 320) }}
       {% if d.code %}<a class="product-card-name" href="/item/{{ d.shop_id }}/{{ d.code }}">{{ d.name }}</a>{% else %}<span class="product-card-name">{{ d.name }}</span>{% endif %}
       <div class="product-card-meta">{{ d.shop_label }} · <a href="{{ url_for('category_browse', name=d.category.split(' || ')[0]) }}">{{ d.category }}</a></div>
+      {% if d.normalized_display %}<div class="product-card-unit">{{ d.normalized_display }}</div>{% endif %}
+      {% if d.cheaper_elsewhere %}
+      {% set caveat_title = "Παρά την έκπτωση, η τιμή ανά μονάδα είναι χαμηλότερη στο " ~ d.cheaper_elsewhere.shop_label ~ " αυτή τη στιγμή" %}
+      {% if d.cheaper_elsewhere.code %}
+      <a class="badge warn product-card-caveat" href="/item/{{ d.cheaper_elsewhere.shop_id }}/{{ d.cheaper_elsewhere.code }}" title="{{ caveat_title }}">⚠ Φθηνότερα ανά μονάδα στο {{ d.cheaper_elsewhere.shop_label }}</a>
+      {% else %}
+      <span class="badge warn product-card-caveat" title="{{ caveat_title }}">⚠ Φθηνότερα ανά μονάδα στο {{ d.cheaper_elsewhere.shop_label }}</span>
+      {% endif %}
+      {% endif %}
       <div class="product-card-price">
         <span class="price-now">{{ d.price|eur }}</span>
         <span class="price-was">{{ d.full_price|eur }}</span>

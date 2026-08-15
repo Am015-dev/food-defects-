@@ -190,8 +190,12 @@ def get_product_across_shops(session, product_id, shop_labels, exclude_shop_id=N
     not just an exact name string -- across all shops' latest snapshots.
 
     Returns list of dicts: {shop_id, shop_label, name, price, full_price,
-    l30d_price, size_info, metric_unit_description, category} ordered by
-    price ascending.
+    l30d_price, size_info, metric_unit_description, category, code,
+    unit_price} ordered by price ascending. unit_price is the DB-stored,
+    already-normalized-to-a-common-scale value (see
+    price_utils.derive_unit_price) -- safe to compare directly against
+    another row's unit_price for the same product_id, unlike the raw
+    size_info/metric_unit_description fields above.
 
     Args:
         session: SQLAlchemy session
@@ -251,6 +255,8 @@ def get_product_across_shops(session, product_id, shop_labels, exclude_shop_id=N
             "size_info": item.size_info,
             "metric_unit_description": item.metric_unit_description,
             "category": item.category,
+            "code": item.code,
+            "unit_price": item.unit_price,
         }
         for shop_id, item in cheapest_per_shop.items()
     ]
@@ -444,6 +450,9 @@ def get_deals_page(
         ItemPrice.full_price,
         ItemPrice.deal_pct,
         ItemPrice.unit_price,
+        ItemPrice.size_info,
+        ItemPrice.metric_unit_description,
+        ItemPrice.product_id,
     ).filter(
         ItemPrice.snapshot_id.in_(list(shop_by_snapshot)),
         ItemPrice.is_verified_deal.is_(True),
@@ -473,7 +482,7 @@ def get_deals_page(
     rows = query.offset((page - 1) * per_page).limit(per_page).all()
 
     results = []
-    for snapshot_id, name, cat, code, price, full_price, pct, unit_price in rows:
+    for snapshot_id, name, cat, code, price, full_price, pct, unit_price, size_info, mud, product_id in rows:
         sid, snapshot_date = shop_by_snapshot[snapshot_id]
         results.append(
             {
@@ -487,6 +496,9 @@ def get_deals_page(
                 "pct": pct,
                 "tier": deal_tier(pct),
                 "unit_price": unit_price,
+                "size_info": size_info,
+                "metric_unit_description": mud,
+                "product_id": product_id,
                 "snapshot_date": snapshot_date,
             }
         )
@@ -1196,3 +1208,59 @@ def get_category_trend(session, category, days=90):
         .all()
     )
     return list(reversed(rows))
+
+
+def get_cheapest_unit_price_by_product(session, product_ids, shop_labels_by_id, latest=None):
+    """For each of the given product_ids (the same real-world product,
+    matched across chains by product_matching.py -- not just an exact
+    name string), the cheapest current per-standard-unit price anywhere
+    across the tracked shops right now, and which shop/listing has it.
+
+    This is what catches a "verified deal" that's real (the price is
+    genuinely down from this listing's own recent history) but still not
+    a good buy -- a big % off a small, expensive-per-litre jar can still
+    cost more per litre than another shop's everyday-priced large one.
+    ItemPrice.unit_price is already normalized to a common weight/volume
+    scale at ingest time (see price_utils.derive_unit_price), so this
+    needs no per-row re-parsing.
+
+    One query across every shop's latest snapshot for the WHOLE batch of
+    product_ids, not one query per product -- same batch-by-shop
+    discipline as get_bug_streaks/get_deal_streaks.
+
+    Returns {product_id: {"unit_price", "shop_id", "shop_label", "code"}},
+    omitting any product_id with no row carrying a known unit_price.
+    """
+    product_ids = [pid for pid in product_ids if pid is not None]
+    if not product_ids:
+        return {}
+    if latest is None:
+        latest = get_latest_snapshots_for_all_shops(session, list(shop_labels_by_id))
+    if not latest:
+        return {}
+    shop_by_snapshot = {snap.id: sid for sid, snap in latest.items()}
+
+    rows = session.query(
+        ItemPrice.snapshot_id,
+        ItemPrice.product_id,
+        ItemPrice.unit_price,
+        ItemPrice.code,
+    ).filter(
+        ItemPrice.snapshot_id.in_(list(shop_by_snapshot)),
+        ItemPrice.product_id.in_(product_ids),
+        ItemPrice.unit_price.isnot(None),
+        ItemPrice.price > 0,
+    )
+
+    cheapest = {}
+    for snapshot_id, product_id, unit_price, code in rows:
+        current = cheapest.get(product_id)
+        if current is None or unit_price < current["unit_price"]:
+            sid = shop_by_snapshot[snapshot_id]
+            cheapest[product_id] = {
+                "unit_price": unit_price,
+                "shop_id": sid,
+                "shop_label": shop_labels_by_id[sid],
+                "code": code,
+            }
+    return cheapest

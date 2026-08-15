@@ -61,6 +61,11 @@
       <li><span class="badge good">Προσφορά</span> Κανόνας: τιμή τουλάχιστον {{ "%.0f"|format(min_deal_pct) }}% κάτω από την κατώτατη 30 ημερών, με γνωστή αρχική τιμή, εξαιρουμένων προϊόντων ανά βάρος.
         Τιμή {{ stored.price|eur }} έναντι κατώτατης {{ stored.l30d_price|eur }} = {{ "%.1f"|format(stored.deal_pct) }}% έκπτωση.</li>
       {% endif %}
+      {% if cheaper_elsewhere %}
+      <li><span class="badge warn">⚠ Ακριβό ανά μονάδα</span> Παρά την έκπτωση, η τιμή ανά μονάδα είναι φθηνότερη αυτή τη στιγμή στο
+        {% if cheaper_elsewhere.code %}<a href="/item/{{ cheaper_elsewhere.shop_id }}/{{ cheaper_elsewhere.code }}">{{ cheaper_elsewhere.shop_label }}</a>{% else %}{{ cheaper_elsewhere.shop_label }}{% endif %}.
+        Μια έκπτωση σε ένα ακριβό προϊόν δεν το κάνει πάντα την καλύτερη επιλογή.</li>
+      {% endif %}
     </ul>
   </details>
   {% endif %}
