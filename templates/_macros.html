@@ -1,20 +1,22 @@
-{# Product thumbnail. size = CSS box in px; h = CDN height (2x for retina).
-   The wrapping span shows a faint cart glyph (see .thumb::before) that
-   serves as both the loading state and the no-image fallback: the CDN
-   answers HTTP 400 for items without an image, and the inline onerror
-   removes the img so the glyph shows. Inline handler on purpose -- it
-   still works if app.js never loads. Empty alt: decorative, the product
-   name is the adjacent text. #}
+{# Product thumbnail. size = CSS box in px (must have a matching .thumb-N
+   rule in style.css -- kept as fixed classes, not an inline style, so
+   the CSP's style-src can stay strict with no 'unsafe-inline'). h = CDN
+   height (2x for retina). The wrapping span shows a faint cart glyph
+   (see .thumb::before) that serves as both the loading state and the
+   no-image fallback: the CDN answers HTTP 400 for items without an
+   image, and app.js (not an inline onerror= -- same CSP reason) removes
+   the img so the glyph shows through. Empty alt: decorative, the
+   product name is the adjacent text. #}
 {% macro thumb(shop_id, code, size=40, h=80) -%}
-<span class="thumb" style="--thumb-size:{{ size }}px" aria-hidden="true">{% if shop_id and code %}<img
+<span class="thumb thumb-{{ size }}" aria-hidden="true">{% if shop_id and code %}<img
   src="https://cdn.e-food.gr/cdn-cgi/image/h={{ h }},fit=cover,f=auto/restaurants/{{ shop_id }}/menu_item/{{ code }}"
   alt="" width="{{ size }}" height="{{ size }}" loading="lazy" decoding="async"
-  referrerpolicy="no-referrer" onerror="this.remove()">{% endif %}</span>
+  referrerpolicy="no-referrer">{% endif %}</span>
 {%- endmacro %}
 
 {% macro shop_logo(shop_id, size=22, h=44) -%}
-<span class="thumb thumb-logo" style="--thumb-size:{{ size }}px" aria-hidden="true"><img
+<span class="thumb thumb-logo thumb-{{ size }}" aria-hidden="true"><img
   src="https://cdn.e-food.gr/cdn-cgi/image/h={{ h }},fit=cover,f=auto/shop/{{ shop_id }}/logo"
   alt="" width="{{ size }}" height="{{ size }}" loading="lazy" decoding="async"
-  referrerpolicy="no-referrer" onerror="this.remove()"></span>
+  referrerpolicy="no-referrer"></span>
 {%- endmacro %}

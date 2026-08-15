@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 import requests
+from flask import g
 
 from db import SessionLocal
 from ingest import store_snapshot
@@ -165,6 +166,41 @@ def test_healthz_db_failure_does_not_leak_exception_detail(client, monkeypatch):
     assert "db.internal.example" not in resp.get_data(as_text=True)
 
 
+def test_security_headers_present(client):
+    resp = client.get("/")
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+    assert resp.headers["X-Frame-Options"] == "DENY"
+    assert resp.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+    csp = resp.headers["Content-Security-Policy"]
+    assert "default-src 'self'" in csp
+    assert "https://cdn.e-food.gr" in csp  # product/shop thumbnails
+    assert "object-src 'none'" in csp
+    assert "frame-ancestors 'none'" in csp
+
+
+def test_csp_script_src_has_no_unsafe_inline(client):
+    # The CSP must rely on the per-request nonce, not a blanket
+    # 'unsafe-inline', or it stops meaningfully restricting inline
+    # scripts at all.
+    csp = client.get("/").headers["Content-Security-Policy"]
+    assert "'unsafe-inline'" not in csp
+    assert "nonce-" in csp
+
+
+def test_csp_nonce_matches_inline_script_tag(client):
+    resp = client.get("/")
+    csp = resp.headers["Content-Security-Policy"]
+    nonce = csp.split("nonce-", 1)[1].split("'", 1)[0]
+    body = resp.get_data(as_text=True)
+    assert f'nonce="{nonce}"' in body
+
+
+def test_csp_nonce_differs_per_request(client):
+    nonce1 = client.get("/").headers["Content-Security-Policy"]
+    nonce2 = client.get("/").headers["Content-Security-Policy"]
+    assert nonce1 != nonce2
+
+
 def test_robots_txt(client):
     resp = client.get("/robots.txt")
     assert resp.status_code == 200
@@ -183,7 +219,11 @@ def test_500_page_is_themed():
     # Flask's TESTING=True makes real requests propagate exceptions
     # instead of hitting the errorhandler, so this calls the handler
     # directly rather than triggering a real unhandled exception.
+    # test_request_context() doesn't run before_request (only a real
+    # dispatched request does), so set what it would have: the CSP
+    # nonce inject_globals() reads when rendering 500.html.
     with flask_app.test_request_context():
+        g.csp_nonce = "test-nonce"
         body, status = server_error(Exception("simulated failure"))
         assert status == 500
         assert "500" in body

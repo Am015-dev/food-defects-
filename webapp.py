@@ -7,6 +7,7 @@ styles in static/ -- this module is routes and filter parsing only.
 import csv
 import io
 import math
+import secrets
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from flask import (
     Flask,
     Response,
     abort,
+    g,
     jsonify,
     redirect,
     render_template,
@@ -86,6 +88,34 @@ def format_gr_date(value):
     return str(value)
 
 
+@app.before_request
+def _set_csp_nonce():
+    # One nonce per request, used both by the CSP header below and the
+    # one legitimately-necessary inline <script> in base.html (the
+    # no-JS/AOS flash guard, which must run before first paint and so
+    # can't be an external deferred file) -- lets script-src stay
+    # 'self' + this nonce only, no 'unsafe-inline'.
+    g.csp_nonce = secrets.token_urlsafe(16)
+
+
+@app.after_request
+def _set_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "img-src 'self' data: https://cdn.e-food.gr; "
+        f"script-src 'self' 'nonce-{g.csp_nonce}'; "
+        "style-src 'self'; "
+        "base-uri 'self'; "
+        "object-src 'none'; "
+        "frame-ancestors 'none'; "
+        "form-action 'self'"
+    )
+    return response
+
+
 @app.context_processor
 def inject_globals():
     def page_url(page):
@@ -99,7 +129,12 @@ def inject_globals():
     finally:
         session.close()
 
-    return {"shop_nav": SHOPS, "page_url": page_url, "site_last_updated": site_last_updated}
+    return {
+        "shop_nav": SHOPS,
+        "page_url": page_url,
+        "site_last_updated": site_last_updated,
+        "csp_nonce": g.csp_nonce,
+    }
 
 
 # ---------- Manual refresh -----------------------------------------

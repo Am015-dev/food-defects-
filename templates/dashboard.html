@@ -15,7 +15,7 @@
 <section class="panel banner">
   <h2>Τα δεδομένα μπορεί να είναι παλιά</h2>
   <p class="meta">{{ last_updated|grdate if last_updated else "ποτέ" }}
-  <form method="post" action="/refresh" style="display:inline-block; margin-left:8px">
+  <form method="post" action="/refresh" class="inline-form ml-8">
     <button type="submit" class="btn secondary">Ανανέωση τώρα →</button>
   </form></p>
 </section>

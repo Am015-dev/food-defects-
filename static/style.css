@@ -339,6 +339,19 @@ ul.items li .li-body { min-width: 0; }
 }
 .thumb img.img-loading { opacity: 0; }
 .thumb-logo { border-radius: 6px; }
+/* Fixed sizes actually used by templates/_macros.html call sites --
+   listed explicitly rather than set via an inline style="" attribute,
+   so the CSP's style-src can stay strict (no 'unsafe-inline'). */
+.thumb-22 { --thumb-size: 22px; }
+.thumb-32 { --thumb-size: 32px; }
+.thumb-36 { --thumb-size: 36px; }
+.thumb-40 { --thumb-size: 40px; }
+.thumb-80 { --thumb-size: 80px; }
+
+/* ---------- Utility ---------- */
+
+.ml-8 { margin-left: 8px; }
+.inline-form { display: inline-block; }
 
 .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 

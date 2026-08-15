@@ -5,7 +5,8 @@
    4. th[data-sort] click-sorts the table body client-side.
    5. Stat count-up (vendor/countUp.umd.js).
    6. Scroll reveals (vendor/aos.js).
-   7. Thumbnail fade-in. */
+   7. Thumbnail fade-in.
+   8. Broken thumbnail removal. */
 
 document.addEventListener("DOMContentLoaded", function () {
   var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -95,4 +96,18 @@ document.addEventListener("DOMContentLoaded", function () {
       img.addEventListener("error", reveal);
     });
   }
+
+  // 8. Remove a broken thumbnail (e.g. the CDN's HTTP 400 for an item
+  //    with no image) so the wrapping span's cart-glyph placeholder
+  //    shows through. This used to be an inline onerror= attribute;
+  //    moved here so the CSP's script-src doesn't need 'unsafe-inline'.
+  //    Runs unconditionally -- this is graceful degradation, not
+  //    animation, so it isn't gated behind reduceMotion.
+  document.querySelectorAll(".thumb img").forEach(function (img) {
+    if (img.complete && img.naturalWidth === 0) {
+      img.remove();
+      return;
+    }
+    img.addEventListener("error", function () { img.remove(); });
+  });
 });

@@ -12,7 +12,7 @@
 {# The "js" class gates AOS's hidden initial states: aos.css unconditionally
    sets [data-aos^=fade] to opacity 0, which would blank every panel for
    no-JS visitors without the html:not(.js) override in style.css. #}
-<script>document.documentElement.classList.add("js")</script>
+<script nonce="{{ csp_nonce }}">document.documentElement.classList.add("js")</script>
 </head>
 <body>
 <header class="topbar">
