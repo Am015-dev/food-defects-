@@ -9,7 +9,7 @@ from collections import defaultdict
 from sqlalchemy import and_, func, literal, literal_column, or_
 from sqlalchemy.orm import aliased
 
-from db import ItemPrice, Product, ProductListing, Snapshot
+from db import ItemPrice, PriceExtreme, Product, ProductListing, Snapshot
 from price_utils import fold_name
 
 
@@ -1103,3 +1103,53 @@ def get_basket_comparison(session, shop_labels_by_id, terms, latest=None):
         }
 
     return {"lines": lines, "shop_totals": shop_totals, "split": split}
+
+
+def get_price_extremes(
+    session,
+    shop_labels_by_id,
+    shop_id=None,
+    category=None,
+    min_swing_pct=None,
+    page=1,
+    per_page=50,
+):
+    """One page of the price_extremes rollup table (see
+    ingest.update_price_extremes_rollup), sorted by biggest swing first
+    -- "which currently-listed products have moved the most" across
+    however much history retention.py has kept. This table is tiny
+    (one row per currently-listed item) and precomputed nightly, so
+    unlike most of this module's other filters there's no scan-size
+    guard to worry about here."""
+    query = session.query(PriceExtreme)
+    if shop_id is not None:
+        query = query.filter(PriceExtreme.shop_id == shop_id)
+    else:
+        query = query.filter(PriceExtreme.shop_id.in_(list(shop_labels_by_id)))
+    if category:
+        query = query.filter(PriceExtreme.category.ilike(f"{category}%"))
+    if min_swing_pct:
+        query = query.filter(PriceExtreme.swing_pct >= min_swing_pct)
+
+    total = query.count()
+    query = query.order_by(PriceExtreme.swing_pct.desc())
+
+    last_page = max(1, math.ceil(total / per_page))
+    page = min(max(1, page), last_page)
+    rows = query.offset((page - 1) * per_page).limit(per_page).all()
+
+    results = [
+        {
+            "shop_id": r.shop_id,
+            "shop_label": shop_labels_by_id.get(r.shop_id, "?"),
+            "name": r.name,
+            "category": r.category,
+            "code": r.code,
+            "current_price": r.current_price,
+            "min_price": r.min_price,
+            "max_price": r.max_price,
+            "swing_pct": r.swing_pct,
+        }
+        for r in rows
+    ]
+    return results, total

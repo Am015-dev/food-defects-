@@ -14,6 +14,7 @@ from queries import (
     get_category_page,
     get_new_verified_deals,
     get_price_drops,
+    get_price_extremes,
     get_product_across_shops,
     iter_all_bugs,
     iter_all_drops,
@@ -872,6 +873,62 @@ def test_get_basket_comparison_ignores_zero_price_bug_rows():
 
         result = get_basket_comparison(session, {SHOP_A: SHOP_A_LABEL}, ["Broken"])
         assert result["lines"][0]["matches"] == {}
+    finally:
+        session.close()
+
+
+def _add_price_extreme(session, shop_id, code, name, category, current, lo, hi):
+    from datetime import datetime, timezone
+
+    from db import PriceExtreme
+
+    session.add(
+        PriceExtreme(
+            shop_id=shop_id,
+            code=code,
+            name=name,
+            category=category,
+            current_price=current,
+            min_price=lo,
+            max_price=hi,
+            swing_pct=(hi - lo) / hi * 100 if hi else 0.0,
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
+
+
+def test_get_price_extremes_sorts_by_biggest_swing_first():
+    session = SessionLocal()
+    try:
+        _add_price_extreme(session, SHOP_A, "c1", "Small Swing", "Cat", 9.0, 8.0, 10.0)
+        _add_price_extreme(session, SHOP_A, "c2", "Big Swing", "Cat", 3.0, 2.0, 10.0)
+        session.commit()
+
+        rows, total = get_price_extremes(session, {SHOP_A: SHOP_A_LABEL})
+        assert total == 2
+        assert rows[0]["name"] == "Big Swing"
+        assert rows[0]["swing_pct"] == pytest.approx(80.0)
+    finally:
+        session.close()
+
+
+def test_get_price_extremes_filters_by_shop_and_min_swing():
+    session = SessionLocal()
+    try:
+        _add_price_extreme(session, SHOP_A, "c1", "In Shop A", "Cat", 3.0, 2.0, 10.0)
+        _add_price_extreme(session, SHOP_B, "c2", "In Shop B", "Cat", 9.0, 8.0, 10.0)
+        session.commit()
+
+        shops = {SHOP_A: SHOP_A_LABEL, SHOP_B: SHOP_B_LABEL}
+        rows, total = get_price_extremes(session, shops, shop_id=SHOP_A)
+        assert total == 1
+        assert rows[0]["name"] == "In Shop A"
+
+        rows, total = get_price_extremes(
+            session, {SHOP_A: SHOP_A_LABEL, SHOP_B: SHOP_B_LABEL}, min_swing_pct=50.0
+        )
+        assert total == 1
+        assert rows[0]["name"] == "In Shop A"
     finally:
         session.close()
 

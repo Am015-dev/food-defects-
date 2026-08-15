@@ -54,6 +54,7 @@ from queries import (
     get_low_confidence_matches,
     get_new_verified_deals,
     get_price_drops,
+    get_price_extremes,
     get_product_across_shops,
     get_shop_bug_rates,
     get_trend,
@@ -868,6 +869,51 @@ def category_browse(name):
         q=q,
         shop_filter=shop_filter,
         sort=sort,
+    )
+
+
+@app.route("/extremes")
+def extremes():
+    """Which currently-listed products have swung the most between their
+    lowest and highest price over the retained history (see
+    retention.py -- a rolling ~90-day window) -- read straight from the
+    price_extremes rollup table (ingest.update_price_extremes_rollup),
+    computed nightly on the GitHub Actions runner. Nothing here is
+    computed live: the web service only ever reads this small
+    precomputed table."""
+    shop_filter = _valid_shop_id()
+    category = _parse_category()
+    min_swing_pct = request.args.get("min_swing_pct", type=float)
+    page = max(1, request.args.get("page", default=1, type=int))
+    per_page = 50
+
+    session = SessionLocal()
+    try:
+        latest = get_latest_snapshots_for_all_shops(session, list(SHOP_LABELS))
+        categories = get_categories(session, [s.id for s in latest.values()])
+        rows, total = get_price_extremes(
+            session,
+            SHOP_LABELS,
+            shop_id=shop_filter,
+            category=category,
+            min_swing_pct=min_swing_pct,
+            page=page,
+            per_page=per_page,
+        )
+    finally:
+        session.close()
+
+    pages = max(1, math.ceil(total / per_page))
+    return render_template(
+        "extremes.html",
+        rows=rows,
+        total=total,
+        page=min(page, pages),
+        pages=pages,
+        categories=categories,
+        shop_filter=shop_filter,
+        category=category,
+        min_swing_pct=min_swing_pct,
     )
 
 

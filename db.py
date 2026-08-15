@@ -120,6 +120,33 @@ class ProductListing(Base):
     __table_args__ = (UniqueConstraint("shop_id", "code", name="uq_shop_code"),)
 
 
+class PriceExtreme(Base):
+    """One row per currently-listed (shop_id, code): its lowest and
+    highest real price across the retained item_prices history (see
+    retention.py -- effectively a rolling ~90-day window). Computed
+    once nightly by ingest.py's rollup step on the GitHub Actions
+    runner, which has the RAM to aggregate the full history; the web
+    service only ever reads this small precomputed table, never
+    recomputes it live. Delisted items' rows are deleted at rollup
+    time (see update_price_extremes in queries.py), not merely left
+    stale."""
+
+    __tablename__ = "price_extremes"
+
+    id = Column(Integer, primary_key=True)
+    shop_id = Column(Integer, ForeignKey("shops.id"), nullable=False)
+    code = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    category = Column(String)
+    current_price = Column(Float, nullable=False)
+    min_price = Column(Float, nullable=False)
+    max_price = Column(Float, nullable=False)
+    swing_pct = Column(Float, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (UniqueConstraint("shop_id", "code", name="uq_price_extreme_shop_code"),)
+
+
 def _add_missing_columns():
     """Tiny forward-only migration.
 
@@ -209,6 +236,8 @@ def _ensure_indexes():
         # get_product_across_shops and compare_across_shops both filter
         # snapshot_id together with product_id.
         "CREATE INDEX IF NOT EXISTS ix_item_prices_snapshot_product ON item_prices (snapshot_id, product_id)",
+        # The /extremes leaderboard reads this table sorted by swing size.
+        "CREATE INDEX IF NOT EXISTS ix_price_extremes_swing ON price_extremes (swing_pct)",
     ]
     with engine.begin() as conn:
         for statement in statements:

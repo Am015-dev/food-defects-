@@ -432,6 +432,43 @@ def test_basket_no_match_shows_empty_state(client, seeded):
     assert "Δεν βρέθηκε" in body
 
 
+def test_extremes_page_reads_the_rollup_table(client):
+    from datetime import datetime, timezone
+
+    from db import PriceExtreme
+
+    session = SessionLocal()
+    try:
+        session.add(
+            PriceExtreme(
+                shop_id=SHOP_A,
+                code="c1",
+                name="Rollup Item",
+                category="Τρόφιμα || Test",
+                current_price=3.0,
+                min_price=2.0,
+                max_price=10.0,
+                swing_pct=80.0,
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    resp = client.get("/extremes")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "Rollup Item" in body
+    assert "80%" in body
+
+
+def test_extremes_page_empty_is_not_a_500(client):
+    resp = client.get("/extremes")
+    assert resp.status_code == 200
+    assert "Καμία διαθέσιμη" in resp.get_data(as_text=True)
+
+
 def test_compare_groups_differently_phrased_names_across_chains(client):
     # Regression for the product identity layer: two different chains
     # phrasing the same product differently (word order, size format)

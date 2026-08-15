@@ -13,7 +13,9 @@ runner with its own RAM rather than the memory-constrained web service.
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-from db import ItemPrice, ProductListing, SessionLocal, Shop, Snapshot, init_db
+from sqlalchemy import func
+
+from db import ItemPrice, PriceExtreme, ProductListing, SessionLocal, Shop, Snapshot, init_db
 from efood_client import fetch_restaurant
 from price_analysis import (
     find_placeholder_reference_price_bugs,
@@ -163,6 +165,91 @@ def fetch_and_store_shop(shop_id, label, today):
         session.close()
 
 
+def update_price_extremes_rollup(session=None):
+    """Recompute price_extremes for every shop's currently-listed items,
+    from the retained item_prices history (see retention.py -- a rolling
+    ~90-day window). Delete-then-bulk-insert per shop, the same pattern
+    store_snapshot uses for a day's rows, so an item that's since been
+    delisted doesn't leave a stale row behind.
+
+    Meant to run once at the end of a full ingest, after every shop's
+    snapshot for today is written -- not per shop during fetch, since it
+    needs each shop's *latest* snapshot to know today's name/category/
+    price. The MIN/MAX aggregation itself is pushed down to the
+    database (one GROUP BY per shop) rather than pulled into Python row
+    by row -- this runs on the GitHub Actions runner precisely so that
+    kind of full-history aggregation doesn't have to happen on the
+    memory-constrained web service.
+    """
+    owns_session = session is None
+    session = session or SessionLocal()
+    try:
+        rows_written = 0
+        for (shop_id,) in session.query(Shop.id):
+            latest = (
+                session.query(Snapshot)
+                .filter_by(shop_id=shop_id)
+                .order_by(Snapshot.snapshot_date.desc())
+                .first()
+            )
+            if latest is None:
+                continue
+
+            current = {
+                code: (name, category, price)
+                for code, name, category, price in session.query(
+                    ItemPrice.code, ItemPrice.name, ItemPrice.category, ItemPrice.price
+                ).filter(
+                    ItemPrice.snapshot_id == latest.id,
+                    ItemPrice.code.isnot(None),
+                    ItemPrice.price > 0,
+                )
+            }
+
+            session.query(PriceExtreme).filter_by(shop_id=shop_id).delete(synchronize_session=False)
+            if not current:
+                continue
+
+            extremes = {
+                code: (lo, hi)
+                for code, lo, hi in session.query(
+                    ItemPrice.code, func.min(ItemPrice.price), func.max(ItemPrice.price)
+                )
+                .join(Snapshot, Snapshot.id == ItemPrice.snapshot_id)
+                .filter(
+                    Snapshot.shop_id == shop_id,
+                    ItemPrice.price > 0,
+                    ItemPrice.code.isnot(None),
+                )
+                .group_by(ItemPrice.code)
+            }
+
+            now = datetime.now(timezone.utc)
+            new_rows = []
+            for code, (name, category, price) in current.items():
+                lo, hi = extremes.get(code, (price, price))
+                new_rows.append(
+                    PriceExtreme(
+                        shop_id=shop_id,
+                        code=code,
+                        name=name,
+                        category=category,
+                        current_price=price,
+                        min_price=lo,
+                        max_price=hi,
+                        swing_pct=(hi - lo) / hi * 100 if hi else 0.0,
+                        updated_at=now,
+                    )
+                )
+            session.bulk_save_objects(new_rows)
+            rows_written += len(new_rows)
+        session.commit()
+        return rows_written
+    finally:
+        if owns_session:
+            session.close()
+
+
 def run_ingestion():
     """Fetch and store every tracked shop, with bounded concurrency so
     only a handful of shops' raw catalogs are ever in memory at once.
@@ -188,6 +275,12 @@ def run_ingestion():
             print(f"retention: deleted {pruned} old item_prices row(s)")
     except Exception as exc:  # noqa: BLE001 - a pruning failure shouldn't fail ingestion
         print(f"retention: pruning failed, will retry next run: {exc}")
+
+    try:
+        written = update_price_extremes_rollup()
+        print(f"price extremes: refreshed {written} row(s)")
+    except Exception as exc:  # noqa: BLE001 - a rollup failure shouldn't fail ingestion
+        print(f"price extremes: rollup failed, will retry next run: {exc}")
 
     return {"date": today, "results": results}
 
