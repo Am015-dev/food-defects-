@@ -491,6 +491,7 @@ ul.items li .li-body { min-width: 0; }
   margin: 12px 0;
 }
 .product-card {
+  position: relative;
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -519,7 +520,14 @@ ul.items li .li-body { min-width: 0; }
   min-height: 2.6em;
 }
 .product-card-name:hover { text-decoration: underline; }
+/* Stretched-link: the whole card (photo, whitespace, price row -- not
+   just the small name text) is clickable, matching what every card-grid
+   reference site does. The name link's ::after covers the full card via
+   position:absolute + inset:0; the still-independently-clickable
+   category link sits above that overlay via z-index. */
+.product-card-name::after { content: ""; position: absolute; inset: 0; }
 .product-card-meta { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.product-card-meta a { position: relative; z-index: 1; }
 .product-card-price { margin-top: auto; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
 .product-card-price .price-now { font-size: 16px; }
 .product-card-price .price-was { font-size: 12px; }
