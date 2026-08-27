@@ -1,0 +1,28 @@
+name: Emergency: reclaim Postgres disk space
+
+# One-off, manual-only maintenance run -- see scripts/reclaim_space.py.
+# Not scheduled: this is a stopgap for the "food-defects-db is over 90%
+# of its free-tier storage" warning, not part of the regular pipeline.
+# Safe to delete this workflow (and the script) once the database has
+# moved to a provider with more headroom.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  reclaim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Reclaim disk space
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python scripts/reclaim_space.py
