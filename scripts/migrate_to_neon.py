@@ -23,12 +23,14 @@ Meant to be run once, manually, from a GitHub Actions workflow_dispatch
 pipeline. See the "Migrate off Render's free Postgres" plan for the
 full picture.
 
-Also caps how much of item_prices it copies: the first real run hit
-Neon's free-tier 512MB project limit partway through that table alone
-(Render's full 90-day item_prices is 588MB by itself). Copying only the
-most recent MIGRATE_ITEM_PRICES_DAYS -- the same window retention.py
-is being cut to for Neon's smaller tier -- keeps the target well under
-the cap without needing a paid plan.
+Also caps how much of item_prices it copies: both the 90-day and the
+45-day attempt hit Neon's free-tier 512MB project limit partway
+through that table (recent days are denser than the 90-day average --
+the catalog has grown over time -- so 45 days wasn't actually half the
+size). MIGRATE_ITEM_PRICES_DAYS is deliberately conservative as a
+result; the run's own before/after pg_database_size print is what
+should inform what retention.py's real steady-state window can be,
+not a flat proportion of the original 90-day figure.
 """
 
 import os
@@ -51,7 +53,7 @@ from db import (
 )
 
 BATCH_SIZE = 5000
-MIGRATE_ITEM_PRICES_DAYS = 45
+MIGRATE_ITEM_PRICES_DAYS = 14
 
 # FK-safe order: a table only appears after every table it references,
 # and reversed gives a safe wipe order (children before parents).
@@ -123,6 +125,18 @@ def _reset_sequence(conn, table_name):
     )
 
 
+def _pretty_bytes(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if abs(n) < 1024:
+            return f"{n:.1f}{unit}"
+        n /= 1024
+    return f"{n:.1f}TB"
+
+
+def _db_size(conn):
+    return conn.execute(text("SELECT pg_database_size(current_database())")).scalar()
+
+
 def _same_database(url_a, url_b):
     """Compares host+port+database only, not credentials -- two
     different users on the same database are still "the same database"
@@ -178,6 +192,9 @@ def main():
             mismatched = mismatched or source_count != target_count
             note = f" (last {MIGRATE_ITEM_PRICES_DAYS}d only)" if model is ItemPrice else ""
             print(f"{table.name:<28} {copied:>10} {source_count:>10} {target_count:>10}  {status}{note}")
+
+    with target_engine.connect() as conn:
+        print(f"target database size after migration: {_pretty_bytes(_db_size(conn))}")
 
     if mismatched:
         print("row count mismatch on at least one table -- see above", file=sys.stderr)
