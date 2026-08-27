@@ -3,21 +3,28 @@ over 90% of its free-tier storage. retention.prune_old_item_prices()
 already runs at the start of every ingest and deletes rows past the
 90-day retention window, but a plain DELETE in Postgres doesn't shrink
 the table file on disk -- it just marks the space reusable for future
-inserts within the same table. Only VACUUM FULL actually returns the
-freed space to the filesystem.
+inserts within the same table.
 
-By default this ONLY vacuums (no data loss at all -- every row still
-inside the existing 90-day retention window is kept) to see how much of
-the reported >90% usage is just unreclaimed dead space from ordinary
-day-to-day deletes/updates, which is the common case and doesn't need
-losing any history to fix.
+Plain VACUUM (no FULL) is what this runs: it reclaims that dead-tuple
+space back into item_prices' own free space map, at essentially no
+extra disk cost, so future inserts (including tomorrow's ingest) can
+reuse it instead of growing the file further. It does NOT shrink the
+file on disk or reduce Render's reported storage-used number -- only
+VACUUM FULL does that, and VACUUM FULL needs roughly as much free space
+as the table currently occupies to build a compacted copy before
+swapping it in. The first real run against production confirmed this
+database doesn't have that headroom (psycopg2.errors.DiskFull: "could
+not extend file ... No space left on device" partway through a
+VACUUM FULL), so FULL isn't attempted here.
 
-Only if that isn't enough headroom does further pruning become a real
-tradeoff (deleting more of the irreplaceable price history than the
-normal 90-day window already does) -- that's a call for a human, not
-this script, so it's opt-in via RECLAIM_PRUNE_DAYS rather than
-automatic. Set that env var to a day count (e.g. 45) to prune to that
-window before vacuuming, in the same run.
+Pruning further than the normal 90-day retention window is a real
+tradeoff (deleting irreplaceable price history) -- that's a call for a
+human, not this script, so it's opt-in via RECLAIM_PRUNE_DAYS rather
+than automatic. Set that env var to a day count (e.g. 45) to prune to
+that window before vacuuming, in the same run. Pruning is also the only
+way left to reduce Render's reported storage number given VACUUM FULL
+isn't viable -- consider it if this stopgap alone isn't enough headroom
+to keep ingestion writing.
 
 Meant to be run once, manually, from a GitHub Actions workflow_dispatch
 (see .github/workflows/reclaim-space.yml) against the production
@@ -68,8 +75,8 @@ def main():
 
     # VACUUM can't run inside a transaction block; AUTOCOMMIT sidesteps that.
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-        print("running VACUUM (FULL, ANALYZE) on item_prices -- this holds an exclusive lock...")
-        conn.execute(text("VACUUM (FULL, ANALYZE) item_prices"))
+        print("running VACUUM (ANALYZE) on item_prices...")
+        conn.execute(text("VACUUM (ANALYZE) item_prices"))
 
     with engine.connect() as conn:
         after_db = _db_size(conn)
