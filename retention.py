@@ -1,18 +1,18 @@
 """Retention: drop old per-item price rows so the database stays within
-Render's free-tier Postgres limit, while keeping the small per-day
+Neon's free-tier Postgres limit, while keeping the small per-day
 Snapshot summary rows forever so the dashboard's trend chart
 (queries.get_trend) keeps working indefinitely.
 
 13 shops x ~7,500 items/day is roughly 90-100k ItemPrice rows/day --
-at that rate the free 1GB tier fills up in a couple of months without
-this running regularly.
+Neon's free tier is 0.5GB, half of Render's old 1GB, so at that rate it
+fills up in roughly a month without this running regularly.
 """
 
 from datetime import datetime, timedelta, timezone
 
 from db import ItemPrice, SessionLocal, Snapshot
 
-RETENTION_DAYS = 90
+RETENTION_DAYS = 45
 
 
 def prune_old_item_prices(session=None, retention_days=RETENTION_DAYS):

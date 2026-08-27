@@ -1,0 +1,29 @@
+name: "One-off: migrate database to Neon"
+
+# One-off, manual-only migration -- see scripts/migrate_to_neon.py and
+# the "Migrate off Render's free Postgres" plan for context. Not
+# scheduled: run it once, verify the row counts it prints, then delete
+# this workflow (and NEON_DATABASE_URL) in a follow-up commit.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Copy every table to Neon
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          PYTHONPATH: .
+        run: python scripts/migrate_to_neon.py
