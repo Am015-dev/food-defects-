@@ -7,7 +7,16 @@ name: Emergency: reclaim Postgres disk space
 # moved to a provider with more headroom.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      prune_days:
+        description: >-
+          Leave empty to only VACUUM (no data loss). Set to a day count
+          (e.g. 45) to also prune item_prices older than that many days
+          before vacuuming -- deletes irreplaceable price history beyond
+          the normal 90-day retention window, so only set this if a
+          plain vacuum didn't free enough space.
+        required: false
 
 jobs:
   reclaim:
@@ -25,4 +34,5 @@ jobs:
       - name: Reclaim disk space
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RECLAIM_PRUNE_DAYS: ${{ inputs.prune_days }}
         run: python scripts/reclaim_space.py

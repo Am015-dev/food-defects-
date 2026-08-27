@@ -1,32 +1,37 @@
 """One-off emergency maintenance: Render emailed that food-defects-db is
 over 90% of its free-tier storage. retention.prune_old_item_prices()
 already runs at the start of every ingest and deletes rows past the
-retention window, but a plain DELETE in Postgres doesn't shrink the
-table file on disk -- it just marks the space reusable for future
+90-day retention window, but a plain DELETE in Postgres doesn't shrink
+the table file on disk -- it just marks the space reusable for future
 inserts within the same table. Only VACUUM FULL actually returns the
 freed space to the filesystem.
 
-This script (a) prunes down to a tighter interim retention window --
-independent of retention.RETENTION_DAYS, so it isn't waiting on that
-constant's own change to land -- and (b) VACUUM FULLs item_prices (by
-far the largest table) to reclaim the space immediately, printing
-before/after sizes so the effect is visible in the run's own log.
+By default this ONLY vacuums (no data loss at all -- every row still
+inside the existing 90-day retention window is kept) to see how much of
+the reported >90% usage is just unreclaimed dead space from ordinary
+day-to-day deletes/updates, which is the common case and doesn't need
+losing any history to fix.
+
+Only if that isn't enough headroom does further pruning become a real
+tradeoff (deleting more of the irreplaceable price history than the
+normal 90-day window already does) -- that's a call for a human, not
+this script, so it's opt-in via RECLAIM_PRUNE_DAYS rather than
+automatic. Set that env var to a day count (e.g. 45) to prune to that
+window before vacuuming, in the same run.
 
 Meant to be run once, manually, from a GitHub Actions workflow_dispatch
 (see .github/workflows/reclaim-space.yml) against the production
 DATABASE_URL -- not part of the regular daily pipeline.
 """
 
+import os
+
 from sqlalchemy import text
 
 from db import SessionLocal, engine
 from retention import prune_old_item_prices
 
-# Tighter than the current RETENTION_DAYS=90 (or the planned 45) on
-# purpose: this is a one-time emergency reclaim, not the new steady
-# state -- better to free real headroom immediately than trim exactly
-# to the eventual target.
-EMERGENCY_RETENTION_DAYS = 30
+PRUNE_DAYS = os.environ.get("RECLAIM_PRUNE_DAYS")
 
 
 def _pretty_bytes(n):
@@ -51,12 +56,15 @@ def main():
         before_table = _table_size(conn, "item_prices")
     print(f"before: database={_pretty_bytes(before_db)} item_prices={_pretty_bytes(before_table)}")
 
-    session = SessionLocal()
-    try:
-        deleted = prune_old_item_prices(session, retention_days=EMERGENCY_RETENTION_DAYS)
-    finally:
-        session.close()
-    print(f"pruned {deleted} item_prices row(s) older than {EMERGENCY_RETENTION_DAYS} days")
+    if PRUNE_DAYS:
+        session = SessionLocal()
+        try:
+            deleted = prune_old_item_prices(session, retention_days=int(PRUNE_DAYS))
+        finally:
+            session.close()
+        print(f"pruned {deleted} item_prices row(s) older than {PRUNE_DAYS} days")
+    else:
+        print("RECLAIM_PRUNE_DAYS not set -- skipping extra pruning, vacuum only")
 
     # VACUUM can't run inside a transaction block; AUTOCOMMIT sidesteps that.
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
