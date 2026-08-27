@@ -3,7 +3,13 @@ name: "One-off: migrate database to Neon"
 # One-off, manual-only migration -- see scripts/migrate_to_neon.py and
 # the "Migrate off Render's free Postgres" plan for context. Not
 # scheduled: run it once, verify the row counts it prints, then delete
-# this workflow (and NEON_DATABASE_URL) in a follow-up commit.
+# this workflow (and RENDER_DATABASE_URL, NEON_DATABASE_URL) in a
+# follow-up commit.
+#
+# Needs a RENDER_DATABASE_URL secret (the Render database's connection
+# string) in addition to NEON_DATABASE_URL -- deliberately not
+# DATABASE_URL, since that secret's value changes over the course of
+# this migration; see scripts/migrate_to_neon.py's docstring.
 
 on:
   workflow_dispatch: {}
@@ -23,7 +29,7 @@ jobs:
 
       - name: Copy every table to Neon
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RENDER_DATABASE_URL: ${{ secrets.RENDER_DATABASE_URL }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           PYTHONPATH: .
         run: python scripts/migrate_to_neon.py

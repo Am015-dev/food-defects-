@@ -1,6 +1,15 @@
 """One-off migration: copy every table from the source Postgres
-(DATABASE_URL, Render's free-tier database) to a fresh target
-(NEON_DATABASE_URL), row for row, in FK-safe order.
+(RENDER_DATABASE_URL) to a fresh target (NEON_DATABASE_URL), row for
+row, in FK-safe order.
+
+Deliberately NOT DATABASE_URL for the source: that secret's value
+changes over the course of this migration (it starts out pointing at
+Render and, after cutover, ends up pointing at Neon), so a script that
+read it mid-migration could easily end up copying a database into
+itself -- which is exactly what happened the first time this ran, when
+DATABASE_URL had already been switched to Neon ahead of the actual
+copy. RENDER_DATABASE_URL is a distinct, unambiguous secret that only
+ever means "the old database," so this can't recur.
 
 Why not pg_dump/pg_restore: this database is disk-constrained enough
 that a consistent dump isn't reliable here (see
@@ -19,6 +28,7 @@ import os
 import sys
 
 from sqlalchemy import create_engine, func, select, text
+from sqlalchemy.engine import make_url
 
 import db as db_module
 from db import (
@@ -88,13 +98,35 @@ def _reset_sequence(conn, table_name):
     )
 
 
+def _same_database(url_a, url_b):
+    """Compares host+port+database only, not credentials -- two
+    different users on the same database are still "the same database"
+    for this check."""
+    a, b = make_url(url_a), make_url(url_b)
+    return (a.host, a.port, a.database) == (b.host, b.port, b.database)
+
+
 def main():
-    source_engine = db_module.engine  # already built from DATABASE_URL at import time
+    try:
+        source_url = _normalize(os.environ["RENDER_DATABASE_URL"])
+    except KeyError:
+        print("RENDER_DATABASE_URL is not set -- nothing to migrate from.", file=sys.stderr)
+        sys.exit(1)
     try:
         target_url = _normalize(os.environ["NEON_DATABASE_URL"])
     except KeyError:
         print("NEON_DATABASE_URL is not set -- nothing to migrate to.", file=sys.stderr)
         sys.exit(1)
+
+    if _same_database(source_url, target_url):
+        print(
+            "RENDER_DATABASE_URL and NEON_DATABASE_URL point at the same "
+            "database -- refusing to migrate a database into itself.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    source_engine = create_engine(source_url, future=True)
     target_engine = create_engine(target_url, future=True)
 
     # Reuse db.py's own schema/index setup against the target, so it ends
