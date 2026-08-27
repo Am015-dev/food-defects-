@@ -1,4 +1,4 @@
-name: Emergency: reclaim Postgres disk space
+name: "Emergency: reclaim Postgres disk space"
 
 # One-off, manual-only maintenance run -- see scripts/reclaim_space.py.
 # Not scheduled: this is a stopgap for the "food-defects-db is over 90%
