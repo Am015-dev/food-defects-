@@ -103,22 +103,22 @@ def _same_database(url_a, url_b):
     return (a.host, a.port, a.database) == (b.host, b.port, b.database)
 
 
+def _require_env(name):
+    """A GitHub Actions workflow's `env:` block always defines the
+    variable name even when the underlying secret doesn't exist or is
+    blank -- os.environ[name] would return "" rather than raise KeyError
+    in that case, so check for blank explicitly instead of just presence."""
+    value = os.environ.get(name, "")
+    if not value:
+        print(f"{name} is not set (or is blank) -- check the GitHub secret's value.", file=sys.stderr)
+        sys.exit(1)
+    return value
+
+
 def main():
-    try:
-        source_url = _normalize(os.environ["RENDER_DATABASE_URL"])
-    except KeyError:
-        print("RENDER_DATABASE_URL is not set -- nothing to migrate from.", file=sys.stderr)
-        sys.exit(1)
-    try:
-        turso_url = os.environ["TURSO_DATABASE_URL"]
-    except KeyError:
-        print("TURSO_DATABASE_URL is not set -- nothing to migrate to.", file=sys.stderr)
-        sys.exit(1)
-    try:
-        turso_token = os.environ["TURSO_AUTH_TOKEN"]
-    except KeyError:
-        print("TURSO_AUTH_TOKEN is not set -- can't authenticate to Turso.", file=sys.stderr)
-        sys.exit(1)
+    source_url = _normalize(_require_env("RENDER_DATABASE_URL"))
+    turso_url = _require_env("TURSO_DATABASE_URL")
+    turso_token = _require_env("TURSO_AUTH_TOKEN")
     target_url = db_module.normalize_database_url(turso_url, auth_token=turso_token)
 
     if _same_database(source_url, target_url):
