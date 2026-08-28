@@ -23,6 +23,7 @@ jobs:
       - run: pip install -r requirements.txt
 
       - name: Copy every table to Turso
+        timeout-minutes: 45
         env:
           RENDER_DATABASE_URL: ${{ secrets.RENDER_DATABASE_URL }}
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}

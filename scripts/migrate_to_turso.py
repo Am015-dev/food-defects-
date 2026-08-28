@@ -65,9 +65,18 @@ def _normalize(url):
 def _copy_table(table, source_conn, target_conn):
     """Keyset-paginated copy (WHERE id > last_id), not OFFSET -- some of
     these tables are hundreds of thousands of rows, and OFFSET
-    pagination gets quadratically slower as it grows."""
+    pagination gets quadratically slower as it grows.
+
+    Prints one line per batch (flushed immediately): Turso's HTTP-based
+    protocol makes each batch's round-trip much slower than a native
+    Postgres connection's, so a big table can legitimately take tens of
+    minutes -- without a per-batch signal there was no way to tell that
+    apart from a genuine hang (which is exactly what happened on the
+    first real run: no output at all for 45 minutes, cancelled with no
+    way to know how far it had actually gotten)."""
     total = 0
     last_id = 0
+    batch_num = 0
     while True:
         stmt = select(table).where(table.c.id > last_id).order_by(table.c.id).limit(BATCH_SIZE)
         rows = source_conn.execute(stmt).mappings().all()
@@ -76,6 +85,8 @@ def _copy_table(table, source_conn, target_conn):
         target_conn.execute(table.insert(), [dict(row) for row in rows])
         total += len(rows)
         last_id = rows[-1]["id"]
+        batch_num += 1
+        print(f"  {table.name}: batch {batch_num}, {total} rows so far", flush=True)
     return total
 
 
@@ -116,6 +127,13 @@ def _require_env(name):
 
 
 def main():
+    # Stdout is block-buffered, not line-buffered, when it's not a real
+    # terminal (a GitHub Actions runner's captured output) -- without
+    # this, the per-batch progress prints in _copy_table wouldn't
+    # actually reach the log until the buffer filled or the process
+    # exited, defeating their whole purpose.
+    sys.stdout.reconfigure(line_buffering=True)
+
     source_url = _normalize(_require_env("RENDER_DATABASE_URL"))
     turso_url = _require_env("TURSO_DATABASE_URL")
     turso_token = _require_env("TURSO_AUTH_TOKEN")
