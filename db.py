@@ -1,10 +1,11 @@
 """Database layer: one row per item per shop per day, plus a per-day
-snapshot summary per shop. Backed by Postgres in production (Render sets
-DATABASE_URL) and falling back to a local SQLite file for development.
+snapshot summary per shop. Backed by Turso (libSQL) in production and
+falling back to a local SQLite file for development.
 """
 
 import os
 import time
+from urllib.parse import quote
 
 from sqlalchemy import (
     Boolean,
@@ -19,10 +20,29 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///food_defects.db")
-# Render (and some other hosts) hand out "postgres://", but SQLAlchemy 1.4+/2.x requires "postgresql://"
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+def normalize_database_url(url, auth_token=None):
+    """Rewrites a raw DATABASE_URL into whatever SQLAlchemy's dialect
+    actually expects. Shared with scripts/migrate_to_turso.py so both
+    places agree on this exactly once.
+
+    - "postgres://" -> "postgresql://": Render (and some other hosts)
+      hand out the former, SQLAlchemy 1.4+/2.x requires the latter.
+    - "libsql://" -> "sqlite+libsql://...?authToken=...": Turso hands
+      out the database URL and its auth token as two separate values
+      (dashboard, or `turso db show`/`turso db tokens create`), but
+      sqlalchemy-libsql's dialect needs them combined into one URL with
+      the token as a query param.
+    """
+    if url and url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql://", 1)
+    if url and url.startswith("libsql://"):
+        host = url.removeprefix("libsql://")
+        token = auth_token if auth_token is not None else os.environ.get("TURSO_AUTH_TOKEN", "")
+        return f"sqlite+libsql://{host}?authToken={quote(token)}&secure=true"
+    return url
+
+
+DATABASE_URL = normalize_database_url(os.environ.get("DATABASE_URL", "sqlite:///food_defects.db"))
 
 engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, future=True)
