@@ -18,24 +18,27 @@ and daily-ingest.yml's own pg_dump backup step is separately broken by
 a client/server version mismatch. A plain SQLAlchemy copy sidesteps
 both and needs nothing beyond what db.py already describes.
 
+item_prices needs special handling: Neon's free tier caps a whole
+project at 512MB, and this repo is only ~2 weeks old (first commit
+2026-08-11), so despite RETENTION_DAYS=90 there's no 90 days of real
+history to trim -- almost everything already falls inside any
+reasonable day-based cutoff, which is why both a 45-day and a 14-day
+attempt hit the exact same wall at the exact same row. Instead of
+guessing a day count, item_prices is copied most-recent-snapshot-first,
+checking the target's actual on-disk size before each snapshot and
+stopping once ITEM_PRICES_SIZE_BUDGET_BYTES is reached -- so however
+much real history exists, this always keeps as much of the most recent
+of it as actually fits, without needing to know the true date range
+up front or guess again if the catalog's density changes over time.
+
 Meant to be run once, manually, from a GitHub Actions workflow_dispatch
 (see .github/workflows/migrate-to-neon.yml) -- not part of the regular
 pipeline. See the "Migrate off Render's free Postgres" plan for the
 full picture.
-
-Also caps how much of item_prices it copies: both the 90-day and the
-45-day attempt hit Neon's free-tier 512MB project limit partway
-through that table (recent days are denser than the 90-day average --
-the catalog has grown over time -- so 45 days wasn't actually half the
-size). MIGRATE_ITEM_PRICES_DAYS is deliberately conservative as a
-result; the run's own before/after pg_database_size print is what
-should inform what retention.py's real steady-state window can be,
-not a flat proportion of the original 90-day figure.
 """
 
 import os
 import sys
-from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.engine import make_url
@@ -53,7 +56,10 @@ from db import (
 )
 
 BATCH_SIZE = 5000
-MIGRATE_ITEM_PRICES_DAYS = 14
+# Leaves headroom under Neon's free-tier 512MB hard cap for whatever
+# Postgres/Neon overhead isn't reflected in pg_database_size at the
+# instant it's checked (WAL not yet flushed, in-flight index pages).
+ITEM_PRICES_SIZE_BUDGET_BYTES = 400 * 1024 * 1024
 
 # FK-safe order: a table only appears after every table it references,
 # and reversed gives a safe wipe order (children before parents).
@@ -75,18 +81,14 @@ def _normalize(url):
     return url
 
 
-def _copy_table(table, source_conn, target_conn, extra_where=None):
-    """Keyset-paginated copy (WHERE id > last_id), not OFFSET -- item_prices
-    alone is several hundred MB, and OFFSET pagination gets quadratically
-    slower as it grows. extra_where, when given, further restricts which
-    rows are copied (see MIGRATE_ITEM_PRICES_DAYS)."""
+def _copy_table(table, source_conn, target_conn):
+    """Keyset-paginated copy (WHERE id > last_id), not OFFSET -- some of
+    these tables are tens of thousands of rows, and OFFSET pagination
+    gets quadratically slower as it grows."""
     total = 0
     last_id = 0
     while True:
-        stmt = select(table).where(table.c.id > last_id)
-        if extra_where is not None:
-            stmt = stmt.where(extra_where)
-        stmt = stmt.order_by(table.c.id).limit(BATCH_SIZE)
+        stmt = select(table).where(table.c.id > last_id).order_by(table.c.id).limit(BATCH_SIZE)
         rows = source_conn.execute(stmt).mappings().all()
         if not rows:
             break
@@ -94,6 +96,37 @@ def _copy_table(table, source_conn, target_conn, extra_where=None):
         total += len(rows)
         last_id = rows[-1]["id"]
     return total
+
+
+def _recent_snapshot_ids_desc(source_conn):
+    """Every Snapshot id, most recent first (by snapshot_date, then id as
+    a tiebreak between same-day multi-shop snapshots)."""
+    rows = source_conn.execute(
+        select(Snapshot.__table__.c.id).order_by(
+            Snapshot.__table__.c.snapshot_date.desc(), Snapshot.__table__.c.id.desc()
+        )
+    ).all()
+    return [r[0] for r in rows]
+
+
+def _copy_item_prices_budgeted(source_conn, target_conn, budget_bytes):
+    """Copies item_prices one whole snapshot at a time, most recent first,
+    checking the target's real on-disk size before each one and stopping
+    before it would cross budget_bytes. Whole snapshots only (never a
+    partial one) so a shop's catalog for an included day is never
+    missing some of its items."""
+    table = ItemPrice.__table__
+    total_rows = 0
+    included_snapshots = 0
+    for snapshot_id in _recent_snapshot_ids_desc(source_conn):
+        if _db_size(target_conn) >= budget_bytes:
+            break
+        rows = source_conn.execute(select(table).where(table.c.snapshot_id == snapshot_id)).mappings().all()
+        if rows:
+            target_conn.execute(table.insert(), [dict(row) for row in rows])
+            total_rows += len(rows)
+        included_snapshots += 1
+    return total_rows, included_snapshots
 
 
 def _count(conn, table, extra_where=None):
@@ -173,25 +206,35 @@ def main():
     db_module.engine = target_engine
     db_module.init_db()
 
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=MIGRATE_ITEM_PRICES_DAYS)).strftime("%Y-%m-%d")
-    recent_snapshot_ids = select(Snapshot.__table__.c.id).where(Snapshot.__table__.c.snapshot_date >= cutoff)
-    extra_where_by_model = {ItemPrice: ItemPrice.__table__.c.snapshot_id.in_(recent_snapshot_ids)}
-
     print(f"{'table':<28} {'copied':>10} {'source':>10} {'target':>10}")
     mismatched = False
     with source_engine.connect() as source_conn, target_engine.begin() as target_conn:
         _wipe_target(target_conn)
         for model in MODELS:
             table = model.__table__
-            extra_where = extra_where_by_model.get(model)
-            copied = _copy_table(table, source_conn, target_conn, extra_where)
+            if model is ItemPrice:
+                copied, included_snapshots = _copy_item_prices_budgeted(
+                    source_conn, target_conn, ITEM_PRICES_SIZE_BUDGET_BYTES
+                )
+                target_count = _count(target_conn, table)
+                status = "OK" if copied == target_count else "MISMATCH"
+                mismatched = mismatched or status != "OK"
+                note = f" (most recent {included_snapshots} snapshot(s), size-budgeted)"
+                print(f"{table.name:<28} {copied:>10} {'--':>10} {target_count:>10}  {status}{note}")
+                continue
+
+            copied = _copy_table(table, source_conn, target_conn)
             _reset_sequence(target_conn, table.name)
-            source_count = _count(source_conn, table, extra_where)
-            target_count = _count(target_conn, table, extra_where)
+            source_count = _count(source_conn, table)
+            target_count = _count(target_conn, table)
             status = "OK" if source_count == target_count else "MISMATCH"
             mismatched = mismatched or source_count != target_count
-            note = f" (last {MIGRATE_ITEM_PRICES_DAYS}d only)" if model is ItemPrice else ""
-            print(f"{table.name:<28} {copied:>10} {source_count:>10} {target_count:>10}  {status}{note}")
+            print(f"{table.name:<28} {copied:>10} {source_count:>10} {target_count:>10}  {status}")
+
+        # item_prices doesn't get its sequence reset in the loop above
+        # (it `continue`s before that point) since it needs to happen
+        # after every row for the table has actually landed.
+        _reset_sequence(target_conn, ItemPrice.__table__.name)
 
     with target_engine.connect() as conn:
         print(f"target database size after migration: {_pretty_bytes(_db_size(conn))}")
