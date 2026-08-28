@@ -1,0 +1,31 @@
+name: "One-off: migrate database to Turso"
+
+# One-off, manual-only migration -- see scripts/migrate_to_turso.py.
+# Not scheduled: run it once, verify the row counts it prints, then
+# delete this workflow (and RENDER_DATABASE_URL, TURSO_DATABASE_URL,
+# TURSO_AUTH_TOKEN) in a follow-up commit once the cutover is verified
+# live.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Copy every table to Turso
+        env:
+          RENDER_DATABASE_URL: ${{ secrets.RENDER_DATABASE_URL }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          PYTHONPATH: .
+        run: python scripts/migrate_to_turso.py
