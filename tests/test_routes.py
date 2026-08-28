@@ -681,10 +681,12 @@ def test_basket_no_match_shows_empty_state(client, seeded):
 def test_extremes_page_reads_the_rollup_table(client):
     from datetime import datetime, timezone
 
-    from db import PriceExtreme
+    from db import PriceExtreme, Shop
 
     session = SessionLocal()
     try:
+        session.add(Shop(id=SHOP_A, label=SHOP_A_LABEL))
+        session.flush()
         session.add(
             PriceExtreme(
                 shop_id=SHOP_A,

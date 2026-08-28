@@ -1045,8 +1045,11 @@ def test_get_basket_comparison_ignores_zero_price_bug_rows():
 def _add_price_extreme(session, shop_id, code, name, category, current, lo, hi):
     from datetime import datetime, timezone
 
-    from db import PriceExtreme
+    from db import PriceExtreme, Shop
 
+    if session.get(Shop, shop_id) is None:
+        session.add(Shop(id=shop_id, label=f"Shop {shop_id}"))
+        session.flush()
     session.add(
         PriceExtreme(
             shop_id=shop_id,
