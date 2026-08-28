@@ -119,7 +119,7 @@ def main():
     source_url = _normalize(_require_env("RENDER_DATABASE_URL"))
     turso_url = _require_env("TURSO_DATABASE_URL")
     turso_token = _require_env("TURSO_AUTH_TOKEN")
-    target_url = db_module.normalize_database_url(turso_url, auth_token=turso_token)
+    target_url, target_connect_args = db_module.normalize_database_url(turso_url, auth_token=turso_token)
 
     if _same_database(source_url, target_url):
         print(
@@ -130,7 +130,7 @@ def main():
         sys.exit(1)
 
     source_engine = create_engine(source_url, future=True)
-    target_engine = create_engine(target_url, future=True)
+    target_engine = create_engine(target_url, connect_args=target_connect_args, future=True)
 
     # Reuse db.py's own schema/index setup against the target, so it ends
     # up exactly as a fresh deploy would create it -- see db.init_db().

@@ -5,7 +5,6 @@ falling back to a local SQLite file for development.
 
 import os
 import time
-from urllib.parse import quote
 
 from sqlalchemy import (
     Boolean,
@@ -22,29 +21,39 @@ from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
 def normalize_database_url(url, auth_token=None):
     """Rewrites a raw DATABASE_URL into whatever SQLAlchemy's dialect
-    actually expects. Shared with scripts/migrate_to_turso.py so both
-    places agree on this exactly once.
+    actually expects, returning (url, connect_args). Shared with
+    scripts/migrate_to_turso.py so both places agree on this exactly
+    once.
 
     - "postgres://" -> "postgresql://": Render (and some other hosts)
       hand out the former, SQLAlchemy 1.4+/2.x requires the latter.
-    - "libsql://" -> "sqlite+libsql://...?authToken=...": Turso hands
-      out the database URL and its auth token as two separate values
-      (dashboard, or `turso db show`/`turso db tokens create`), but
-      sqlalchemy-libsql's dialect needs them combined into one URL with
-      the token as a query param.
+    - "libsql://" -> "sqlite+libsql://...?secure=true" +
+      connect_args={"auth_token": ...}: Turso hands out the database
+      URL and its auth token as two separate values (dashboard, or
+      `turso db show`/`turso db tokens create`). The token must go in
+      connect_args, NOT embedded in the URL's query string as
+      "authToken=..." -- that looks right (sqlalchemy-libsql's dialect
+      accepts it and SQLAlchemy's own URL parsing preserves it) but the
+      underlying libsql_experimental driver never actually reads an
+      auth token out of the connection URI itself, so it silently
+      connects unauthenticated and Turso rejects it with "empty JWT
+      token" -- confirmed against a real Turso host, not just reasoned
+      about. connect_args={"auth_token": ...} reaches
+      libsql_experimental.connect()'s own auth_token= parameter
+      directly and is the form that actually works.
     """
     if url and url.startswith("postgres://"):
-        return url.replace("postgres://", "postgresql://", 1)
+        return url.replace("postgres://", "postgresql://", 1), {}
     if url and url.startswith("libsql://"):
         host = url.removeprefix("libsql://")
         token = auth_token if auth_token is not None else os.environ.get("TURSO_AUTH_TOKEN", "")
-        return f"sqlite+libsql://{host}?authToken={quote(token)}&secure=true"
-    return url
+        return f"sqlite+libsql://{host}?secure=true", {"auth_token": token}
+    return url, {}
 
 
-DATABASE_URL = normalize_database_url(os.environ.get("DATABASE_URL", "sqlite:///food_defects.db"))
+DATABASE_URL, _connect_args = normalize_database_url(os.environ.get("DATABASE_URL", "sqlite:///food_defects.db"))
 
-engine = create_engine(DATABASE_URL, future=True)
+engine = create_engine(DATABASE_URL, connect_args=_connect_args, future=True)
 SessionLocal = sessionmaker(bind=engine, future=True)
 Base = declarative_base()
 
