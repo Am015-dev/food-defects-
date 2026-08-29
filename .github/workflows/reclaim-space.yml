@@ -12,10 +12,19 @@ on:
       prune_days:
         description: >-
           Leave empty to only VACUUM (no data loss). Set to a day count
-          (e.g. 45) to also prune item_prices older than that many days
+          (e.g. 3) to also prune item_prices older than that many days
           before vacuuming -- deletes irreplaceable price history beyond
-          the normal 90-day retention window, so only set this if a
-          plain vacuum didn't free enough space.
+          the normal retention window, so only set this if a plain
+          vacuum didn't free enough space.
+        required: false
+      vacuum_full:
+        description: >-
+          Set to "1" to run VACUUM (FULL, ANALYZE) instead of plain
+          VACUUM -- actually shrinks the table file (plain VACUUM only
+          marks space reusable for future inserts). Takes an exclusive
+          lock on item_prices for the duration; on a provider whose
+          storage requires spare local disk to build the compacted copy
+          this can fail outright (it did against Render's Postgres).
         required: false
 
 jobs:
@@ -35,5 +44,6 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           RECLAIM_PRUNE_DAYS: ${{ inputs.prune_days }}
+          RECLAIM_VACUUM_FULL: ${{ inputs.vacuum_full }}
           PYTHONPATH: .
         run: python scripts/reclaim_space.py
