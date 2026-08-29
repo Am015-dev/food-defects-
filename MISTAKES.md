@@ -298,3 +298,15 @@ numbers, don't just carry the old value over. And order matters for any
 prune-then-write cycle on a hard-capped store: prune first, write
 second, not the reverse — "it ran every time" is not the same claim as
 "it ran early enough to matter."
+
+**Also learned while fixing this:** plain `VACUUM` doesn't shrink a
+Postgres table file — it only marks freed space reusable within that
+table — so pruning 125,795 rows barely moved Neon's reported project
+size (489.2MB → 489.3MB) until `VACUUM (FULL, ANALYZE)` ran, which
+dropped it to 211.9MB. `VACUUM FULL` had been ruled out earlier against
+*Render's* Postgres (failed with `DiskFull` — it needs roughly as much
+free local disk as the table occupies, to build a compacted copy),
+but Neon's storage isn't a fixed local disk the same way, and it
+worked there without issue. A capability ruled out on one provider
+isn't automatically ruled out on another with a different storage
+architecture — worth re-testing rather than assuming.
