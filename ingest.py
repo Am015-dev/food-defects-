@@ -409,15 +409,11 @@ def run_ingestion():
     init_db()
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    results = [None] * len(SHOPS)
-    with ThreadPoolExecutor(max_workers=MAX_CONCURRENCY) as pool:
-        future_to_index = {
-            pool.submit(fetch_and_store_shop, shop["id"], shop["label"], today): i
-            for i, shop in enumerate(SHOPS)
-        }
-        for future in as_completed(future_to_index):
-            results[future_to_index[future]] = future.result()
-
+    # Prune BEFORE fetching/storing today's rows, not after: on a
+    # tight-quota database (Neon's 512MB project cap) storing a full
+    # day's rows first can exhaust the quota before pruning ever runs,
+    # failing the write for whichever shops process last. See the
+    # 2026-08-29 MISTAKES.md entry.
     try:
         from retention import prune_old_item_prices  # lazy: keeps CLI import light
 
@@ -426,6 +422,15 @@ def run_ingestion():
             print(f"retention: deleted {pruned} old item_prices row(s)")
     except Exception as exc:  # noqa: BLE001 - a pruning failure shouldn't fail ingestion
         print(f"retention: pruning failed, will retry next run: {exc}")
+
+    results = [None] * len(SHOPS)
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENCY) as pool:
+        future_to_index = {
+            pool.submit(fetch_and_store_shop, shop["id"], shop["label"], today): i
+            for i, shop in enumerate(SHOPS)
+        }
+        for future in as_completed(future_to_index):
+            results[future_to_index[future]] = future.result()
 
     try:
         written = update_price_extremes_rollup()

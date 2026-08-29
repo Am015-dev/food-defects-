@@ -112,9 +112,12 @@ pytest -q
 ## Deployment
 
 Deployed on [Render](https://render.com) via `render.yaml`: one free web
-service + one free Postgres database. Scheduling lives in GitHub Actions
-(`daily-ingest.yml`, 05:00 UTC) since Render's free tier has no cron job
-service type.
+service. The database is [Neon](https://neon.com)'s free Postgres tier
+(a permanent free tier, unlike Render's own free Postgres, which has a
+hard expiration) -- `DATABASE_URL` is set directly in Render's dashboard
+(Environment tab), not managed by `render.yaml`. Scheduling lives in
+GitHub Actions (`daily-ingest.yml`, 05:00 UTC) since Render's free tier
+has no cron job service type.
 
 **Keeping the schedule alive**: GitHub disables a scheduled workflow
 automatically after 60 days with no repository activity (any commit or
@@ -122,7 +125,7 @@ manual `workflow_dispatch` run resets that clock). If the daily ingest
 ever seems to have stopped, check the Actions tab first -- it may just
 need a manual re-enable, not a code fix.
 
-**Backups**: Render's free Postgres has no backups of its own, and price
+**Backups**: Neon's free Postgres has no backups of its own, and price
 history can't be re-fetched after the fact (e-food only exposes today's
 prices). `daily-ingest.yml` runs a `pg_dump` after every successful
 ingest, GPG-encrypts it, and keeps it as a 30-day GitHub Actions
@@ -137,9 +140,10 @@ gpg --batch --yes --decrypt --passphrase-fd 0 \
   food_defects_backup.dump.gpg <<< "$BACKUP_ENCRYPTION_PASSPHRASE"
 pg_restore --clean --if-exists -d "$DATABASE_URL" food_defects_backup.dump
 ```
-Old per-item rows are also pruned after 90 days (`retention.py`) to stay
-within the free tier's 1GB limit; the small per-day summary rows
-(`snapshots`, `category_daily_summaries`) are kept forever.
+Old per-item rows are also pruned after 3 days (`retention.py`) to stay
+within Neon's free-tier 512MB whole-project limit; the small per-day
+summary rows (`snapshots`, `category_daily_summaries`) are kept
+forever.
 
 ## Adding a shop
 

@@ -255,3 +255,46 @@ the identical repo state. After introducing or relying on a CI workflow,
 periodically check the actual workflow run (or reproduce with the exact
 command the workflow invokes, not an equivalent-looking one) instead of
 treating a local test run as a proxy for it indefinitely.
+
+---
+
+## 2026-08-29 — retention pruning was a silent no-op, then broke ingest on Neon
+
+**Where:** `retention.py` (`RETENTION_DAYS`), `ingest.py` (`run_ingestion` write order)
+
+**What happened:** After migrating production off Render's Postgres
+(1GB free tier) to Neon (512MB free tier, capped for the *whole
+project*, not just one table), the very next day's scheduled ingest
+failed: `psycopg2.errors.DiskFull: could not extend file because
+project size limit (512 MB) has been exceeded`, mid-write, for most of
+the day's 13 shops.
+
+**Root cause:** Two compounding bugs, neither caught by tests (tests
+seed their own short retention window, not the real constant):
+1. `RETENTION_DAYS = 90` was sized for Render's 1GB tier. This repo's
+   real history only goes back to 2026-08-11 — under 90 days old. So in
+   production, `prune_old_item_prices()` had never deleted a single row
+   since it was added; it looked wired up (called every ingest, logged
+   "retention: deleted 0…") but was functionally dead code.
+2. Even setting that aside, `run_ingestion()` called
+   `prune_old_item_prices()` *after* fetching and storing all 13 shops'
+   rows for the day, not before. On a tight-quota database, that order
+   guarantees today's writes can exhaust the quota before pruning ever
+   gets a chance to free space.
+   Neither bug mattered on Render's 1GB tier (enough headroom to hide
+   both); Neon's 512MB cap exposed both on the very first day.
+
+**Fix:** Cut `RETENTION_DAYS` to 3 (sized from the actual observed
+Neon-migration numbers: ~114MB/day at this app's current row width,
+against a 512MB total cap — see `retention.py`'s docstring for the
+math), and moved the `prune_old_item_prices()` call to the start of
+`run_ingestion()`, before the shop-fetching loop, so space is freed
+before new rows are written rather than after.
+
+**Lesson:** A retention/cleanup constant sized for one environment's
+quota doesn't automatically make sense after moving to a
+smaller-quota environment — re-derive it from the new provider's real
+numbers, don't just carry the old value over. And order matters for any
+prune-then-write cycle on a hard-capped store: prune first, write
+second, not the reverse — "it ran every time" is not the same claim as
+"it ran early enough to matter."
