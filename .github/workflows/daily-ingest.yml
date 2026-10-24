@@ -61,7 +61,9 @@ jobs:
         if: success()
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: pg_dump "$DATABASE_URL" --format=custom --file=food_defects_backup.dump
+        # Call the 18 binary by full path: the package does not put it on PATH,
+        # so plain `pg_dump` still resolves to the image's version 16.
+        run: /usr/lib/postgresql/18/bin/pg_dump "$DATABASE_URL" --format=custom --file=food_defects_backup.dump
 
       # GitHub Actions artifacts are downloadable by anyone with repo
       # read access (or an actions:read token) for the whole retention

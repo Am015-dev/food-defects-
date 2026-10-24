@@ -310,3 +310,27 @@ but Neon's storage isn't a fixed local disk the same way, and it
 worked there without issue. A capability ruled out on one provider
 isn't automatically ruled out on another with a different storage
 architecture — worth re-testing rather than assuming.
+
+---
+
+## 2026-10-24 — installed pg 18 client, but the backup step still ran the image's pg_dump 16
+
+**Where:** `.github/workflows/daily-ingest.yml`, the `Dump database` step
+
+**What happened:** Daily ingest runs failed from 2026-10-10 onward with
+`pg_dump: error: aborting because of server version mismatch` (server
+18.6, pg_dump 16.15). The 2026-08-14 fix had installed
+`postgresql-client-18`, but the same runs still reported pg_dump 16.15.
+
+**Root cause:** The `postgresql-client-18` package installs its binaries
+under `/usr/lib/postgresql/18/bin/`, which is not on PATH. The step ran
+plain `pg_dump`, which resolved to the image's version 16 binary. The
+install was verified only by the package installing without error, not
+by checking which binary the step actually runs.
+
+**Fix:** The step now calls `/usr/lib/postgresql/18/bin/pg_dump` by full
+path.
+
+**Lesson:** After installing a versioned tool, check the binary the
+workflow will call (`which pg_dump`, or `pg_dump --version` inside the
+same step), not only whether the package installed.
