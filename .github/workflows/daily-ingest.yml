@@ -4,9 +4,10 @@ name: Daily catalog ingest
 # to the Render Postgres, rather than making the 512MB web service hold
 # whole shop catalogs in memory -- that repeatedly got it OOM-killed.
 
+# Schedule removed 2026-11-05: since 2026-09-23 e-food's catalog API
+# answers "authentication_error" to anonymous calls, so every scheduled run
+# failed and sent a failure email (see MISTAKES.md). Manual runs only.
 on:
-  schedule:
-    - cron: "0 5 * * *"  # 05:00 UTC daily
   workflow_dispatch: {}  # allows manually triggering a run from the Actions tab
 
 jobs:

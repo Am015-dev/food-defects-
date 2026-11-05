@@ -334,3 +334,31 @@ path.
 **Lesson:** After installing a versioned tool, check the binary the
 workflow will call (`which pg_dump`, or `pg_dump --version` inside the
 same step), not only whether the package installed.
+
+---
+
+## 2026-11-05 — ingest failed for every shop for six weeks, but the run looked like a backup problem
+
+**Where:** `ingest.py` (`run_ingestion` exit status), `retention.py`, `.github/workflows/daily-ingest.yml`
+
+**What happened:** From 2026-09-23, e-food's `/api/v1/restaurants/<id>`
+answered `authentication_error` ("Η λειτουργία απαιτεί συνδεδεμένο
+χρήστη") to every anonymous call. Run #46 (2026-09-22) stored all 13
+shops; run #47 (2026-09-23), same commit `a49fca5`, failed all 13.
+`ingest.py` still exited 0, so the red mark came from the later backup
+step (pg_dump version mismatch, then an empty passphrase secret). Six
+weeks of fixes went to the backup step, not the real cause. Meanwhile
+`prune_old_item_prices()` ran at the start of each run and deleted the
+remaining item rows, with no new rows coming in and no working backup.
+
+**Root cause:** Per-shop failures were caught and printed but never
+turned into a non-zero exit, and retention pruned without checking that
+the same run had stored anything new.
+
+**Fix:** Removed the daily schedule (it can only fail until a new data
+source exists). Still open: make ingest exit non-zero when zero shops
+succeed, and prune only after a run that stored new rows.
+
+**Lesson:** When a pipeline turns red, read the first step's output, not
+only the step that failed. A step that logs "FAILED" and exits 0 hides
+the real error behind whatever breaks next.
