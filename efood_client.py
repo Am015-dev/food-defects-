@@ -5,6 +5,7 @@ is intended for low-frequency, personal, non-commercial use, not bulk or
 high-frequency crawling.
 """
 
+import os
 from urllib.parse import urlencode
 
 import requests
@@ -21,10 +22,25 @@ HEADERS = {
 }
 
 
-def fetch_restaurant(restaurant_id, timeout=25):
-    """Fetch a store's full catalog (categories, items, prices). No login required."""
+def auth_headers(auth_header=None):
+    """HEADERS plus the user's own login header, if given.
+
+    Since 2026-09-23 e-food answers anonymous catalog calls with
+    "authentication_error". EFOOD_AUTH_HEADER holds one header copied from
+    the browser's DevTools while logged in, as "Name: value" (for example
+    "Authorization: Bearer ..." or "Cookie: ...").
+    """
+    raw = auth_header if auth_header is not None else os.environ.get("EFOOD_AUTH_HEADER", "")
+    if ":" not in raw:
+        return HEADERS
+    name, value = raw.split(":", 1)
+    return {**HEADERS, name.strip(): value.strip()}
+
+
+def fetch_restaurant(restaurant_id, timeout=25, auth_header=None):
+    """Fetch a store's full catalog (categories, items, prices). Needs a login header since 2026-09-23."""
     url = f"{BASE_URL}/api/v1/restaurants/{restaurant_id}"
-    response = requests.get(url, headers=HEADERS, timeout=timeout)
+    response = requests.get(url, headers=auth_headers(auth_header), timeout=timeout)
     response.raise_for_status()
     payload = response.json()
     if payload.get("status") != "ok":

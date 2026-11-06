@@ -87,6 +87,29 @@ which the dashboard prefers wherever present. Only for the minority of
 items missing that field does it fall back to parsing the package-size
 string itself (`price_utils.parse_size_info`).
 
+## Streamlit app (current setup, since 2026-11)
+
+Since 2026-09-23 e-food answers anonymous catalog calls with
+`authentication_error`, so the scheduled GitHub Actions ingest is off.
+`streamlit_app.py` replaces it with an on-demand **Update now** button:
+
+- It fetches every shop with your own e-food login header and saves
+  `data/prices/YYYY-MM-DD.csv.gz` (one file per day, in this repo).
+- It needs these secrets (Streamlit Cloud: App settings -> Secrets):
+  - `EFOOD_AUTH_HEADER` -- log in on e-food.gr, open DevTools -> Network,
+    click a request to `api.e-food.gr`, and copy its `Authorization` (or
+    `Cookie`) request header as `Name: value`. It expires: copy it again
+    when updates start to fail with `authentication_error`.
+  - `GITHUB_TOKEN` -- fine-grained token, this repo only, Contents: read
+    and write. Without it the file stays on the app's disk only and is lost
+    on restart.
+  - `GITHUB_REPO` -- `Am015-dev/food-defects-`.
+- Deploy: share.streamlit.io -> New app -> this repo, branch `main`,
+  file `streamlit_app.py`. Each commit to `data/prices/` redeploys the app
+  with the new file.
+
+Run locally: `pip install -r requirements.txt && streamlit run streamlit_app.py`.
+
 ## Running locally
 
 ```
